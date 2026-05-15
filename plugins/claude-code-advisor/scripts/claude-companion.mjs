@@ -438,6 +438,10 @@ function handleRescue(argv) {
   handleTaskCommand(argv, "rescue");
 }
 
+function handleDo(argv) {
+  handleTaskCommand(argv, "do");
+}
+
 function handleReview(argv, kind) {
   const { options, positionals } = parseArgs(argv);
   const ctx = currentContext(options);
@@ -720,6 +724,7 @@ function printUsage() {
       "Usage:",
       "  claude-companion setup [--json]",
       "  claude-companion advise [--background] [--write] [--effort <level>] [--no-background-fallback] [prompt]",
+      "  claude-companion do [--background] [--write] [--model <model>] [--effort <level>] [prompt]",
       "  claude-companion rescue [--background] [--write] [--resume] [--effort <level>] [--no-background-fallback] [prompt]",
       "  claude-companion review [--base <ref>] [--effort <level>] [--json]",
       "  claude-companion adversarial-review [--base <ref>] [--effort <level>] [focus] [--json]",
@@ -747,6 +752,9 @@ async function main() {
       break;
     case "rescue":
       handleRescue(argv);
+      break;
+    case "do":
+      handleDo(argv);
       break;
     case "review":
       handleReview(argv, "review");

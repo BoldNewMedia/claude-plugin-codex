@@ -3,9 +3,10 @@ name: claude
 description: >
   Use when the user asks Codex to consult Claude Code, run a Claude advisor
   pass, get a Claude adversarial review, check a plan or diff with Claude,
-  ask Claude to rescue or continue a task, inspect Claude advisor job status,
-  fetch a Claude result, or cancel a Claude advisor job. This skill routes through the bundled
-  claude-companion.mjs runtime; it does not call the Claude CLI directly.
+  ask Claude to do a prepared coding, exploration, verifier, scout, or rescue
+  task, inspect Claude advisor job status, fetch a Claude result, or cancel a
+  Claude advisor job. This skill routes through the bundled claude-companion.mjs
+  runtime; it does not call the Claude CLI directly.
 ---
 
 # Claude Code Advisor
@@ -21,6 +22,7 @@ Canonical forms:
 ```text
 $claude setup
 $claude advise <question>
+$claude do [--background] [--write] [--model sonnet] <prepared task>
 $claude rescue [--background] [--write] [--resume] <task>
 $claude review [--base <ref>]
 $claude adversarial-review [--base <ref>] [focus]
@@ -38,6 +40,7 @@ routing:
 /claude <subcommand> <args> -> $claude <subcommand> <args>
 /claude:setup -> $claude setup
 /claude:advise <question> -> $claude advise <question>
+/claude:do <prepared task> -> $claude do <prepared task>
 /claude:rescue <task> -> $claude rescue <task>
 /claude:review [--base <ref>] -> $claude review [--base <ref>]
 /claude:adversarial-review [focus] -> $claude adversarial-review [focus]
@@ -64,8 +67,12 @@ commands. The guaranteed Codex surface is the `$claude` skill mention.
   use the user's configured default model.
 - Pass `--effort xhigh` for advice, review, adversarial-review, rescue, and
   background jobs unless the user explicitly asks for another effort.
-- Sonnet is reserved for junior-agent delegation governed by the
-  `tasks-for-sonnet` skill, not for this Claude advisor path.
+- Sonnet is reserved for explicit junior-agent delegation governed by the
+  `tasks-for-sonnet` skill. Never send Sonnet a vague task.
+- Before `$claude do --model sonnet`, load `tasks-for-sonnet` and prepare the
+  task from that skill. The prompt must include the role, absolute paths or a
+  pinned commit, a word cap, "What Must Be True", "Known Constraints", and
+  "Mechanical Verification".
 - Do not auto-resume a Claude job when the companion says explicit selection
   is required.
 
@@ -75,6 +82,10 @@ commands. The guaranteed Codex surface is the `$claude` skill mention.
 - `advise`: use for architecture questions, second opinions, and checker work.
   Use `--background` for substantive prompts, large context, or anything likely
   to need more than one short answer.
+- `do`: use only for a specific prepared task. This is the preferred route when
+  the user asks Claude to do coding, exploration, scout, verifier, reviewer, or
+  synthesis work. For Sonnet, first apply `tasks-for-sonnet`; then route the
+  prepared task through `do`.
 - `rescue`: use for substantial task handoff, debugging, implementation help,
   or follow-up work. Prefer `--background`. It is read-only unless `--write`
   is explicit.
@@ -93,6 +104,7 @@ For long-running work, prefer:
 
 ```bash
 node "<plugin root>/scripts/claude-companion.mjs" advise --background "<question>"
+node "<plugin root>/scripts/claude-companion.mjs" do --background --model sonnet "<prepared task>"
 node "<plugin root>/scripts/claude-companion.mjs" rescue --background "<task>"
 node "<plugin root>/scripts/claude-companion.mjs" monitor <job-id> --interval-ms 30000
 ```
@@ -104,6 +116,53 @@ with a concrete prompt. Use `--background` for anything likely to take more
 than one short answer. If a foreground `advise` or `rescue` times out, the
 companion automatically launches one background job; monitor that job instead
 of retrying the same prompt.
+
+## Prepared Sonnet Tasks
+
+Use `$claude do --model sonnet` only when the user asks for Claude/Sonnet or
+agrees to use it for a concrete task. The task must be prepared through
+`tasks-for-sonnet` before launching Claude.
+
+Good Sonnet roles:
+
+- Scout or mapper: read a bounded area and return file:line citations.
+- Verifier: read absolute paths or a pinned commit and return PASS/FAIL.
+- Single-concern reviewer: inspect one concern only.
+- Synthesis worker: digest many small inputs into one bounded summary.
+- Fully templated coding or scaffolding: only when the invariant, files, and
+  verification command are explicit.
+
+Do not use Sonnet for application code that needs judgment, broad business
+logic, auth, money, migrations, PII, provider boundaries, or any task where the
+task says only "use X correctly." Codex remains the brain.
+
+Every prepared task must include:
+
+```text
+Role: <scout | verifier | reviewer | synthesis | hands>
+Word cap: <400-600 words unless coding output requires otherwise>
+Targets: <absolute paths and/or pinned commit>
+What Must Be True:
+- <falsifiable invariant>
+Known Constraints:
+- <repo rules, trigger citations, permissions, dependency limits>
+Mechanical Verification:
+- <exact command, grep, browser check, or PASS/FAIL condition>
+Stop Conditions:
+- <when Claude must stop and report instead of guessing>
+```
+
+Route read-only exploration through:
+
+```bash
+node "<plugin root>/scripts/claude-companion.mjs" do --background --model sonnet --effort xhigh "<prepared task>"
+```
+
+Route explicit coding work only after the user agrees to write-capable Claude:
+
+```bash
+node "<plugin root>/scripts/claude-companion.mjs" do --background --write --model sonnet --effort xhigh "<prepared task>"
+```
 
 ## Commands
 
@@ -119,6 +178,7 @@ Examples:
 node "<plugin root>/scripts/claude-companion.mjs" setup --json
 node "<plugin root>/scripts/claude-companion.mjs" adversarial-review --base main --json
 node "<plugin root>/scripts/claude-companion.mjs" advise --background --effort xhigh "<question>"
+node "<plugin root>/scripts/claude-companion.mjs" do --background --model sonnet --effort xhigh "<prepared task>"
 node "<plugin root>/scripts/claude-companion.mjs" monitor <job-id> --interval-ms 30000 --stale-after-ms 120000
 node "<plugin root>/scripts/claude-companion.mjs" status --json
 ```

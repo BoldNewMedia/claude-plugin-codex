@@ -51,6 +51,8 @@ The stable command form is `$claude`. If your Codex UI exposes the skill as
 - `$claude review` runs a structured read-only review of local git state.
 - `$claude adversarial-review` asks Claude to challenge a plan or diff.
 - `$claude advise` asks Claude for a quick second opinion.
+- `$claude do` gives Claude a prepared coding, exploration, verifier, scout, or
+  synthesis task.
 - `$claude rescue` hands Claude a debugging or implementation task. It is
   read-only unless you pass `--write`.
 - `$claude monitor` polls a background Claude job and reports whether Claude is
@@ -61,6 +63,7 @@ Longer jobs can run in the background:
 
 ```text
 $claude advise --background should this VAD tuning loop collect N=5 now?
+$claude do --background --model sonnet map the auth module and return file:line citations
 $claude rescue --background investigate the flaky integration test
 $claude monitor <job-id>
 $claude result <job-id>
@@ -74,6 +77,7 @@ commands:
 ```text
 /claude setup
 /claude:advise should this plan use a background worker?
+/claude:do --background --model sonnet map the auth module
 /claude:rescue --background investigate the flaky integration test
 /claude:review --base main
 /claude:adversarial-review challenge the state management assumptions
@@ -87,6 +91,8 @@ A good default pattern is simple:
 - Run `$claude adversarial-review` when the change is high stakes.
 - Run `$claude advise --background` when you want another model to check a
   plan, tradeoff, or evidence bundle.
+- Run `$claude do --background` when the user wants Claude to perform a
+  specific prepared task.
 - Run `$claude rescue --background` when Codex stalls or you want Claude to
   take a deeper pass.
 
@@ -123,6 +129,7 @@ Use `$claude` in a Codex thread:
 ```text
 $claude setup
 $claude advise --background should this plan use a background worker?
+$claude do --background --model sonnet map this package and cite file:line call sites
 $claude rescue --background investigate the flaky integration test
 $claude monitor <job-id>
 $claude rescue --write fix the failing test with the smallest safe patch
@@ -163,6 +170,13 @@ for the same prompt. Use `--background` up front for real advisor work; use
 Review and adversarial review are read-only. `advise` and `rescue` are also
 read-only unless you pass `--write`. Write-capable Claude work is recorded as a
 separate job type.
+
+`$claude do --model sonnet` is for prepared junior-agent work. Before using it,
+Codex should apply `tasks-for-sonnet` and turn the request into a bounded task:
+role, absolute paths, word cap, What Must Be True, Known Constraints, Mechanical
+Verification, and Stop Conditions. Use it for scouts, mappers, verifiers,
+single-concern reviewers, synthesis, or fully specified scaffolding. Do not use
+Sonnet for broad application code that needs judgment.
 
 Managed Claude jobs ignore inherited MCP server config by default. This keeps
 advisor and rescue runs from blocking on an interactive "enable MCP servers?"

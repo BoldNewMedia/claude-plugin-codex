@@ -476,6 +476,37 @@ console.error("unsupported"); process.exit(2);
   assert.equal(payload.output, "diagnosis only");
 });
 
+test("do runs a prepared Claude task and preserves explicit write mode", () => {
+  const fake = makeFakeClaude(`
+const args = process.argv.slice(2);
+if (args.includes("-p")) {
+  if (!args.includes("--permission-mode") || !args.includes("default")) {
+    console.error("expected write-capable default permission mode");
+    process.exit(2);
+  }
+  if (!args.includes("--model") || args[args.indexOf("--model") + 1] !== "sonnet") {
+    console.error("expected explicit sonnet model");
+    process.exit(2);
+  }
+  console.log("done");
+  process.exit(0);
+}
+console.error("unsupported"); process.exit(2);
+`);
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "claude-state-"));
+  const env = { ...process.env, PATH: `${fake.dir}:${process.env.PATH}`, CLAUDE_COMPANION_STATE_ROOT: stateRoot };
+  const stdout = execFileSync(
+    process.execPath,
+    [companion.pathname, "do", "--write", "--model", "sonnet", "implement the prepared task", "--json"],
+    { env, cwd: stateRoot, encoding: "utf8" }
+  );
+  const payload = JSON.parse(stdout);
+
+  assert.match(payload.jobId, /^do-/);
+  assert.equal(payload.status, "completed");
+  assert.equal(payload.output, "done");
+});
+
 test("foreground timeout fails the job without hanging", () => {
   const fake = makeFakeClaude(`
 setTimeout(() => {}, 5000);

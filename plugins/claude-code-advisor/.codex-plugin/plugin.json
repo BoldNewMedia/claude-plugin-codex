@@ -1,7 +1,7 @@
 {
   "name": "claude-code-advisor",
-  "version": "0.1.6",
-  "description": "Bring local Claude Code into Codex for reviews, adversarial checks, advice, and rescue tasks.",
+  "version": "0.1.7",
+  "description": "Bring local Claude Code into Codex for reviews, prepared tasks, advice, and rescue work.",
   "author": {
     "name": "Yanchuk"
   },
@@ -21,7 +21,7 @@
   "interface": {
     "displayName": "Claude",
     "shortDescription": "Ask local Claude Code from Codex.",
-    "longDescription": "Use local Claude Code from Codex for read-only reviews, adversarial checks, quick advice, and explicit rescue tasks while Codex stays in charge.",
+    "longDescription": "Use local Claude Code from Codex for read-only reviews, adversarial checks, quick advice, prepared tasks, and explicit rescue work while Codex stays in charge.",
     "developerName": "Yanchuk",
     "category": "Coding",
     "capabilities": [
@@ -34,6 +34,7 @@
     "defaultPrompt": [
       "Check Claude Code setup.",
       "Review this diff with Claude Code.",
+      "Do a prepared task with Claude Code.",
       "Rescue this task with Claude Code."
     ],
     "brandColor": "#D97706",
