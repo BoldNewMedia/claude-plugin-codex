@@ -11,7 +11,7 @@ codex plugin marketplace add yanchuk/claude-plugin-codex
 Then open Codex's plugin directory, find `Claude Plugin Codex`, and install
 `Claude`.
 
-Start a new Codex thread and check Claude Code:
+Start a new Codex thread and verify the install:
 
 ```text
 $claude setup
@@ -45,7 +45,8 @@ The stable command form is `$claude`. If your Codex UI exposes the skill as
   read-only unless you pass `--write`.
 - `$claude review` runs a structured read-only review of local git state.
 - `$claude adversarial-review` asks Claude to challenge a plan or diff.
-- `$claude monitor` polls a background Claude job and shows recent logs.
+- `$claude monitor` polls a background Claude job and reports whether Claude is
+  active, stale, or finished.
 - `$claude status`, `$claude result`, and `$claude cancel` manage Claude jobs.
 
 Slash-style aliases are best-effort. Codex plugin manifests do not yet expose a
@@ -102,6 +103,20 @@ $claude cancel <job-id>
 
 If your Codex build shows `/claude` in the slash menu, it is an alias for the
 same skill.
+
+## Monitoring
+
+Use background mode when Claude may need more than one short answer:
+
+```text
+$claude rescue --background investigate the flaky integration test
+$claude monitor <job-id>
+```
+
+The monitor checks Claude every 30 seconds by default. It keeps raw logs in
+JSON output, but the human view shows the useful signal: whether Claude is
+active, the last meaningful line, how long output has been stale, and what to
+do next.
 
 ## Safety
 
@@ -180,9 +195,9 @@ npm run test:e2e:codex
 ```
 
 This requires `codex plugin marketplace add ./`, `Claude` installed from
-Codex's plugin directory, and a logged-in Claude Code CLI. It
-starts a fresh `codex exec` session and verifies that `$claude setup` routes
-through the installed skill.
+Codex's plugin directory, and a logged-in Claude Code CLI. It starts a fresh
+`codex exec` session and verifies that `$claude advise --model sonnet` routes
+through the installed skill. Sonnet is used only for this small routing test.
 
 ## Current Limits
 
@@ -192,11 +207,18 @@ through the installed skill.
   `claude agents`, `claude logs`, `claude attach`, and `claude stop`, it
   degrades to foreground-only behavior.
 - `$claude monitor` checks a background job every 30 seconds by default. It
-  reads `claude logs` and `claude agents` so Codex can see progress and whether
-  the Claude session is still active.
+  reads `claude logs` and `claude agents`, filters routine terminal noise, and
+  marks repeated output as stale after two minutes.
 - Structured review depends on Claude returning valid JSON inside the
   `--output-format json` result envelope. The companion validates and retries
   once before failing.
+
+## Troubleshooting
+
+If Codex shows `Unable to load skill contents` after an update, restart Codex
+or start a new thread. Codex may still point at an older cached skill path after
+a plugin version bump. If the error remains, remove and reinstall the
+`claude-plugin-codex` marketplace.
 
 ## License
 

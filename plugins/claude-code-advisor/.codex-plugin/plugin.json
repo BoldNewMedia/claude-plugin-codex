@@ -1,6 +1,6 @@
 {
   "name": "claude-code-advisor",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "description": "Use local Claude Code from Codex for advice, reviews, adversarial checks, and rescue tasks while Codex remains the orchestrator.",
   "author": {
     "name": "Yanchuk"

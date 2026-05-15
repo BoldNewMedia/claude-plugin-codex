@@ -137,6 +137,62 @@ console.error("unsupported"); process.exit(2);
   assert.equal(snapshots[0].logs.output, "progress: still working");
 });
 
+test("monitor summarizes meaningful progress and stale repeated logs", () => {
+  const fake = makeFakeClaude(`
+const args = process.argv.slice(2);
+if (args.includes("--version")) { console.log("2.1.132 (Claude Code)"); process.exit(0); }
+if (args[0] === "--bg") { console.log("backgrounded · bg123 (idle - send a prompt to start)"); process.exit(0); }
+if (args[0] === "logs") {
+  console.log("Claude Code");
+  console.log("✻ Thinking with xhigh effort");
+  console.log("progress: compiling tests");
+  process.exit(0);
+}
+if (args[0] === "agents") { console.log("bg123 running"); process.exit(0); }
+console.error("unsupported"); process.exit(2);
+`);
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "claude-state-"));
+  const env = { ...process.env, PATH: `${fake.dir}:${process.env.PATH}`, CLAUDE_COMPANION_STATE_ROOT: stateRoot };
+  const launched = execFileSync(process.execPath, [companion.pathname, "advise", "--background", "check architecture", "--json"], {
+    env,
+    cwd: stateRoot,
+    encoding: "utf8"
+  });
+  const job = JSON.parse(launched);
+  const watched = execFileSync(
+    process.execPath,
+    [
+      companion.pathname,
+      "monitor",
+      job.jobId,
+      "--interval-ms",
+      "1",
+      "--max-checks",
+      "2",
+      "--stale-after-ms",
+      "0",
+      "--json"
+    ],
+    { env, cwd: stateRoot, encoding: "utf8" }
+  );
+  const snapshots = watched.trim().split(/\r?\n/).map((line) => JSON.parse(line));
+
+  assert.equal(snapshots[0].summary.state, "active");
+  assert.equal(snapshots[0].summary.lastMeaningfulLine, "progress: compiling tests");
+  assert.equal(snapshots[0].summary.stale, false);
+  assert.equal(snapshots[0].summary.suggestedAction, "Wait or keep monitoring.");
+  assert.equal(snapshots[1].summary.stale, true);
+  assert.match(snapshots[1].summary.suggestedAction, /stalled/i);
+
+  const human = execFileSync(
+    process.execPath,
+    [companion.pathname, "monitor", job.jobId, "--interval-ms", "1", "--max-checks", "1"],
+    { env, cwd: stateRoot, encoding: "utf8" }
+  );
+  assert.match(human, /Last meaningful output: progress: compiling tests/);
+  assert.doesNotMatch(human, /Thinking with xhigh effort/);
+});
+
 test("foreground advise defaults to a larger turn budget", () => {
   const fake = makeFakeClaude(`
 const args = process.argv.slice(2);

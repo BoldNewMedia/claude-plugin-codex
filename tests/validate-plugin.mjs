@@ -5,6 +5,8 @@ const manifest = JSON.parse(fs.readFileSync("plugins/claude-code-advisor/.codex-
 const marketplace = JSON.parse(fs.readFileSync(".agents/plugins/marketplace.json", "utf8"));
 const packageJson = JSON.parse(fs.readFileSync("package.json", "utf8"));
 const skill = fs.readFileSync("plugins/claude-code-advisor/skills/claude/SKILL.md", "utf8");
+const readme = fs.readFileSync("README.md", "utf8");
+const e2e = fs.readFileSync("tests/e2e-codex-skill.mjs", "utf8");
 
 assert.equal(manifest.name, "claude-code-advisor");
 assert.equal(manifest.version, packageJson.version);
@@ -25,5 +27,9 @@ assert.match(skill, /\/claude:rescue/);
 assert.match(skill, /\$claude monitor/);
 assert.match(skill, /Do not pass `--model sonnet`/);
 assert.match(skill, /`--effort xhigh`/);
+assert.match(skill, /--stale-after-ms 120000/);
+assert.match(readme, /Unable to load skill contents/);
+assert.match(readme, /\$claude advise --model sonnet/);
+assert.match(e2e, /--model sonnet/);
 
 console.log("plugin metadata ok");

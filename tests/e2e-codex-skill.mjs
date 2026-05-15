@@ -3,8 +3,8 @@ import { spawnSync } from "node:child_process";
 
 const repoRoot = new URL("..", import.meta.url).pathname;
 const skillMarker = "claude-code-advisor:claude";
-const setupPrompt = [
-  "Use $claude setup to check Claude Code readiness.",
+const advisePrompt = [
+  "Use $claude advise --model sonnet --max-turns 1 --timeout-ms 120000 to ask Claude Code to reply with exactly PASS.",
   "Do not modify files.",
   "Return only a concise PASS/FAIL summary with the key command result."
 ].join(" ");
@@ -47,28 +47,26 @@ assert.match(
 );
 
 const statusBefore = run("git", ["status", "--short"]);
-const execOutput = run("codex", ["exec", "--cd", repoRoot, "--json", setupPrompt], { input: "" });
+const execOutput = run("codex", ["exec", "--cd", repoRoot, "--json", advisePrompt], { input: "" });
 const events = parseJsonLines(execOutput);
-const setupCommand = events.find((event) => {
+const adviseCommand = events.find((event) => {
   return event.type === "item.completed"
     && event.item?.type === "command_execution"
     && event.item.command?.includes("claude-companion.mjs")
-    && event.item.command?.includes("setup --json");
+    && event.item.command?.includes("advise")
+    && event.item.command?.includes("--model sonnet");
 });
 
-assert.ok(setupCommand, "Codex did not route $claude setup through claude-companion.mjs.");
+assert.ok(adviseCommand, "Codex did not route $claude advise --model sonnet through claude-companion.mjs.");
 assert.equal(
-  setupCommand.item.exit_code,
+  adviseCommand.item.exit_code,
   0,
-  `claude-companion setup failed.\nCommand: ${setupCommand.item.command}\nOutput:\n${setupCommand.item.aggregated_output}`
+  `claude-companion advise failed.\nCommand: ${adviseCommand.item.command}\nOutput:\n${adviseCommand.item.aggregated_output}`
 );
 
-const setupPayload = JSON.parse(setupCommand.item.aggregated_output);
-assert.equal(setupPayload.ready, true);
-assert.equal(setupPayload.capabilities.auth.loggedIn, true);
-assert.equal(setupPayload.capabilities.version.supported, true);
+assert.match(adviseCommand.item.aggregated_output, /PASS|completed/i);
 
 const statusAfter = run("git", ["status", "--short"]);
 assert.equal(statusAfter, statusBefore, "Codex E2E smoke changed the repository working tree.");
 
-console.log(`codex skill routing ok: Claude Code ${setupPayload.capabilities.version.raw}`);
+console.log("codex skill routing ok: Claude advise used --model sonnet");

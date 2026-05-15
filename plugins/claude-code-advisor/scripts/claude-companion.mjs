@@ -29,6 +29,7 @@ const DEFAULT_TASK_MAX_TURNS = 8;
 const DEFAULT_REVIEW_MAX_TURNS = 3;
 const DEFAULT_MONITOR_INTERVAL_MS = 30000;
 const DEFAULT_MONITOR_CHECKS = 20;
+const DEFAULT_STALE_AFTER_MS = 120000;
 const DEFAULT_CLAUDE_EFFORT = "xhigh";
 const SUPPORTED_MAJOR = 2;
 
@@ -75,6 +76,46 @@ function stripTerminalControl(value) {
     .map((line) => line.trimEnd())
     .filter(Boolean)
     .join("\n");
+}
+
+function isMeaningfulLogLine(line) {
+  const text = String(line || "").trim();
+  if (!text) {
+    return false;
+  }
+  if (/^claude code$/i.test(text)) {
+    return false;
+  }
+  if (/thinking with .* effort/i.test(text)) {
+    return false;
+  }
+  if (/^(esc|ctrl|shift|enter|tab)\b/i.test(text)) {
+    return false;
+  }
+  if (/^(mcp|warning: mcp|connecting|connected)\b/i.test(text)) {
+    return false;
+  }
+  if (/^[.·*\-_=|/\\()[\]{}<>:;,'"~`!@#$%^&+\s]+$/.test(text)) {
+    return false;
+  }
+  return true;
+}
+
+function extractMeaningfulLogLines(output) {
+  return stripTerminalControl(output)
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(isMeaningfulLogLine);
+}
+
+function formatDuration(ms) {
+  const seconds = Math.max(0, Math.round(ms / 1000));
+  if (seconds < 60) {
+    return `${seconds}s`;
+  }
+  const minutes = Math.floor(seconds / 60);
+  const remainder = seconds % 60;
+  return remainder ? `${minutes}m ${remainder}s` : `${minutes}m`;
 }
 
 function runClaude(args, options = {}) {
@@ -364,6 +405,7 @@ function readLiveStatus(job, options = {}) {
   const agents = runClaude(["agents"], { timeoutMs });
   const agentsOutput = stripTerminalControl(`${agents.stdout || ""}${agents.stderr || ""}`);
   const logsOutput = stripTerminalControl(`${logs.stdout || ""}${logs.stderr || ""}`);
+  const meaningfulLogLines = extractMeaningfulLogLines(logsOutput);
   return {
     checkedAt: new Date().toISOString(),
     jobId: job.id,
@@ -372,7 +414,8 @@ function readLiveStatus(job, options = {}) {
     available: logs.status === 0 || agents.status === 0,
     logs: {
       available: logs.status === 0,
-      output: logsOutput.trim()
+      output: logsOutput.trim(),
+      meaningfulOutput: meaningfulLogLines.join("\n")
     },
     agents: {
       available: agents.status === 0,
@@ -381,20 +424,79 @@ function readLiveStatus(job, options = {}) {
   };
 }
 
+function summarizeLiveStatus(snapshot, monitorState = {}, options = {}) {
+  const staleAfterMs = Number(options["stale-after-ms"] ?? DEFAULT_STALE_AFTER_MS);
+  const nowMs = Date.parse(snapshot.checkedAt) || Date.now();
+  const meaningfulOutput = snapshot.logs?.meaningfulOutput || "";
+  const meaningfulLines = meaningfulOutput
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const fingerprint = meaningfulLines.join("\n");
+  const previousFingerprint = monitorState.meaningfulFingerprint || null;
+  const isRepeatedMeaningfulOutput = Boolean(fingerprint && previousFingerprint === fingerprint);
+
+  if (fingerprint && previousFingerprint !== fingerprint) {
+    monitorState.meaningfulFingerprint = fingerprint;
+    monitorState.meaningfulChangedAtMs = nowMs;
+    monitorState.repeatedMeaningfulChecks = 0;
+  } else if (fingerprint && previousFingerprint === fingerprint) {
+    monitorState.repeatedMeaningfulChecks = (monitorState.repeatedMeaningfulChecks || 0) + 1;
+  }
+
+  const changedAtMs = monitorState.meaningfulChangedAtMs || nowMs;
+  const staleForMs = isRepeatedMeaningfulOutput ? Math.max(0, nowMs - changedAtMs) : 0;
+  const stale = Boolean(snapshot.active && fingerprint && isRepeatedMeaningfulOutput && staleForMs >= staleAfterMs);
+  const lastMeaningfulLine = meaningfulLines.at(-1) || null;
+  let state = snapshot.active ? "active" : "inactive";
+  if (!snapshot.available) {
+    state = "unavailable";
+  } else if (stale) {
+    state = "stale";
+  }
+
+  let suggestedAction = "Check the job result or cancel it.";
+  if (state === "active") {
+    suggestedAction = "Wait or keep monitoring.";
+  } else if (state === "stale") {
+    suggestedAction = "Claude may be stalled. Continue monitoring, inspect logs, or cancel the job.";
+  } else if (state === "unavailable") {
+    suggestedAction = "Check whether Claude Code is installed and the background session still exists.";
+  }
+
+  return {
+    ...snapshot,
+    summary: {
+      state,
+      active: snapshot.active,
+      lastMeaningfulLine,
+      stale,
+      staleForMs,
+      staleFor: formatDuration(staleForMs),
+      suggestedAction
+    }
+  };
+}
+
 function renderMonitorSnapshot(snapshot) {
-  const state = snapshot.active ? "active" : "not active";
+  const summary = snapshot.summary || summarizeLiveStatus(snapshot).summary;
   const lines = [
-    `[${snapshot.checkedAt}] Claude ${snapshot.claudeSessionId || snapshot.job?.id || "job"} is ${state}.`
+    `[${snapshot.checkedAt}] Claude ${snapshot.claudeSessionId || snapshot.job?.id || "job"} is ${summary.state}.`
   ];
   if (snapshot.error) {
     lines.push(snapshot.error);
   }
-  if (snapshot.logs?.output) {
-    lines.push(snapshot.logs.output);
-  }
-  if (!snapshot.logs?.output && snapshot.agents?.output) {
+  if (summary.lastMeaningfulLine) {
+    lines.push(`Last meaningful output: ${summary.lastMeaningfulLine}`);
+  } else if (snapshot.logs?.output) {
+    lines.push("Recent logs contained only Claude status output.");
+  } else if (snapshot.agents?.output) {
     lines.push(snapshot.agents.output);
   }
+  if (summary.stale) {
+    lines.push(`No new meaningful output for ${summary.staleFor}.`);
+  }
+  lines.push(`Action: ${summary.suggestedAction}`);
   return `${lines.join("\n")}\n`;
 }
 
@@ -411,8 +513,9 @@ function handleMonitor(argv) {
   }
   const intervalMs = Number(options["interval-ms"] || DEFAULT_MONITOR_INTERVAL_MS);
   const maxChecks = options.forever ? Infinity : Number(options["max-checks"] || DEFAULT_MONITOR_CHECKS);
+  const monitorState = {};
   for (let index = 0; index < maxChecks; index += 1) {
-    const snapshot = readLiveStatus(job, options);
+    const snapshot = summarizeLiveStatus(readLiveStatus(job, options), monitorState, options);
     writeMonitorSnapshot(snapshot, options.json);
     if (!snapshot.active) {
       break;
@@ -435,7 +538,7 @@ function handleStatus(argv) {
     output({ jobs: ctx.state.jobs }, options.json);
     return;
   }
-  const live = job.claudeSessionId ? readLiveStatus(job, options) : null;
+  const live = job.claudeSessionId ? summarizeLiveStatus(readLiveStatus(job, options), {}, options) : null;
   output({ job, live }, options.json);
 }
 
@@ -485,7 +588,7 @@ function printUsage() {
       "  claude-companion rescue [--background] [--write] [--resume] [--effort <level>] [prompt]",
       "  claude-companion review [--base <ref>] [--effort <level>] [--json]",
       "  claude-companion adversarial-review [--base <ref>] [--effort <level>] [focus] [--json]",
-      "  claude-companion monitor [job-id] [--interval-ms <ms>] [--max-checks <n>] [--json]",
+      "  claude-companion monitor [job-id] [--interval-ms <ms>] [--max-checks <n>] [--stale-after-ms <ms>] [--json]",
       "  claude-companion status [job-id] [--watch] [--json]",
       "  claude-companion result [job-id] [--json]",
       "  claude-companion cancel [job-id] [--json]",

@@ -76,7 +76,9 @@ commands. The guaranteed Codex surface is the `$claude` skill mention.
 - `rescue`: use for substantial task handoff, debugging, implementation help,
   or follow-up work. It is read-only unless `--write` is explicit.
 - `monitor`: use after a background advise or rescue job to poll Claude logs
-  and active agent state. Default to `--interval-ms 30000`.
+  and active agent state. Default to `--interval-ms 30000`. Prefer the human
+  summary unless the user asks for raw JSON; it reports active/stale state, the
+  last meaningful output line, and the suggested next action.
 - `review`: use for ordinary read-only review of local git state.
 - `adversarial-review`: use for challenge reviews, plan attacks, and harness
   checker passes.
@@ -111,6 +113,6 @@ Examples:
 node "<plugin root>/scripts/claude-companion.mjs" setup --json
 node "<plugin root>/scripts/claude-companion.mjs" adversarial-review --base main --json
 node "<plugin root>/scripts/claude-companion.mjs" advise --background --effort xhigh "<question>"
-node "<plugin root>/scripts/claude-companion.mjs" monitor <job-id> --interval-ms 30000
+node "<plugin root>/scripts/claude-companion.mjs" monitor <job-id> --interval-ms 30000 --stale-after-ms 120000
 node "<plugin root>/scripts/claude-companion.mjs" status --json
 ```
