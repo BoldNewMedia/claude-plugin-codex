@@ -1,0 +1,38 @@
+{
+  "name": "claude-code-advisor",
+  "version": "0.1.0",
+  "description": "Use Claude Code from Codex as an advisor, checker, and reviewer while Codex remains the orchestrator.",
+  "author": {
+    "name": "Yanchuk"
+  },
+  "homepage": "https://github.com/yanchuk/claude-plugin-codex",
+  "repository": "https://github.com/yanchuk/claude-plugin-codex",
+  "license": "MIT",
+  "keywords": [
+    "codex",
+    "claude-code",
+    "review",
+    "harness",
+    "advisor"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Claude Code Advisor",
+    "shortDescription": "Use Claude Code from Codex as an advisor, checker, and reviewer.",
+    "longDescription": "Delegates advisory, review, and checker tasks from Codex to the local Claude Code CLI through a managed companion runtime.",
+    "developerName": "Yanchuk",
+    "category": "Coding",
+    "capabilities": [
+      "Read"
+    ],
+    "websiteURL": "https://github.com/yanchuk/claude-plugin-codex",
+    "privacyPolicyURL": "https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement",
+    "termsOfServiceURL": "https://docs.github.com/en/site-policy/github-terms/github-terms-of-service",
+    "defaultPrompt": [
+      "Use $claude setup to check whether Claude Code is available.",
+      "Use $claude adversarial-review to get a Claude Code second opinion on this plan."
+    ],
+    "brandColor": "#D97706",
+    "screenshots": []
+  }
+}

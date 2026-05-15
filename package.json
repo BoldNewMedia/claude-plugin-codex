@@ -1,0 +1,16 @@
+{
+  "name": "claude-plugin-codex",
+  "version": "0.1.0",
+  "description": "Codex plugin that lets Codex use Claude Code as an advisor, checker, and reviewer.",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "test": "node --test tests/*.test.mjs",
+    "test:smoke": "node tests/smoke-installed-tools.mjs",
+    "validate": "npm test && node tests/validate-plugin.mjs"
+  },
+  "engines": {
+    "node": ">=18.18"
+  },
+  "license": "MIT"
+}
