@@ -25,6 +25,11 @@ import {
 } from "./lib/runtime.mjs";
 
 const DEFAULT_TIMEOUT_MS = 120000;
+const DEFAULT_TASK_MAX_TURNS = 8;
+const DEFAULT_REVIEW_MAX_TURNS = 3;
+const DEFAULT_MONITOR_INTERVAL_MS = 30000;
+const DEFAULT_MONITOR_CHECKS = 20;
+const DEFAULT_CLAUDE_EFFORT = "xhigh";
 const SUPPORTED_MAJOR = 2;
 
 function parseArgs(argv) {
@@ -37,7 +42,7 @@ function parseArgs(argv) {
       continue;
     }
     const key = arg.slice(2);
-    if (["json", "background", "write", "resume", "fresh"].includes(key)) {
+    if (["json", "background", "write", "resume", "fresh", "watch", "follow", "forever"].includes(key)) {
       options[key] = true;
       continue;
     }
@@ -53,6 +58,23 @@ function parseArgs(argv) {
 
 function output(value, asJson) {
   process.stdout.write(asJson ? `${JSON.stringify(value, null, 2)}\n` : renderHuman(value));
+}
+
+function sleep(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function stripTerminalControl(value) {
+  return String(value || "")
+    .replace(/\x1B\][^\x07]*(?:\x07|\x1B\\)/g, "")
+    .replace(/\x1B\[[0-?]*[ -/]*[@-~]/g, "")
+    .replace(/\x1B[78]/g, "")
+    .replace(/\x1B[@-Z\\-_]/g, "")
+    .replace(/\r/g, "\n")
+    .split("\n")
+    .map((line) => line.trimEnd())
+    .filter(Boolean)
+    .join("\n");
 }
 
 function runClaude(args, options = {}) {
@@ -198,10 +220,11 @@ function runForeground(ctx, kind, prompt, options = {}) {
     mode: kind,
     prompt,
     outputFormat: options.outputFormat || "text",
-    maxTurns: Number(options.maxTurns || 3),
+    maxTurns: Number(options.maxTurns || DEFAULT_TASK_MAX_TURNS),
     write: Boolean(options.write),
     resumeSessionId: resume?.claudeSessionId ?? null,
-    model: options.model || null
+    model: options.model || null,
+    effort: options.effort || DEFAULT_CLAUDE_EFFORT
   });
   const result = runClaude(args, { cwd: ctx.cwd, timeoutMs: Number(options.timeoutMs || DEFAULT_TIMEOUT_MS) });
   const status = result.status === 0 ? "completed" : "failed";
@@ -223,7 +246,8 @@ function runBackground(ctx, kind, prompt, options = {}) {
     prompt,
     name: `codex-${job.id}`,
     write: Boolean(options.write),
-    model: options.model || null
+    model: options.model || null,
+    effort: options.effort || DEFAULT_CLAUDE_EFFORT
   });
   const result = runClaude(args, { cwd: ctx.cwd, timeoutMs: Number(options.timeoutMs || 30000) });
   if (result.status !== 0) {
@@ -286,7 +310,7 @@ function handleReview(argv, kind) {
   const job = runForeground(ctx, kind, prompt, {
     ...options,
     outputFormat: "json",
-    maxTurns: options["max-turns"] || 3,
+    maxTurns: options["max-turns"] || DEFAULT_REVIEW_MAX_TURNS,
     timeoutMs: options["timeout-ms"]
   });
   if (job.status !== "completed") {
@@ -325,19 +349,93 @@ function findJob(ctx, reference) {
   return ctx.state.jobs.find((job) => job.id === reference || job.claudeSessionId === reference) || null;
 }
 
-function handleStatus(argv) {
+function readLiveStatus(job, options = {}) {
+  if (!job?.claudeSessionId) {
+    return {
+      checkedAt: new Date().toISOString(),
+      active: false,
+      available: false,
+      error: "Job has no Claude background session id.",
+      job
+    };
+  }
+  const timeoutMs = Number(options["timeout-ms"] || 10000);
+  const logs = runClaude(["logs", job.claudeSessionId], { timeoutMs });
+  const agents = runClaude(["agents"], { timeoutMs });
+  const agentsOutput = stripTerminalControl(`${agents.stdout || ""}${agents.stderr || ""}`);
+  const logsOutput = stripTerminalControl(`${logs.stdout || ""}${logs.stderr || ""}`);
+  return {
+    checkedAt: new Date().toISOString(),
+    jobId: job.id,
+    claudeSessionId: job.claudeSessionId,
+    active: logs.status === 0,
+    available: logs.status === 0 || agents.status === 0,
+    logs: {
+      available: logs.status === 0,
+      output: logsOutput.trim()
+    },
+    agents: {
+      available: agents.status === 0,
+      output: agentsOutput.trim()
+    }
+  };
+}
+
+function renderMonitorSnapshot(snapshot) {
+  const state = snapshot.active ? "active" : "not active";
+  const lines = [
+    `[${snapshot.checkedAt}] Claude ${snapshot.claudeSessionId || snapshot.job?.id || "job"} is ${state}.`
+  ];
+  if (snapshot.error) {
+    lines.push(snapshot.error);
+  }
+  if (snapshot.logs?.output) {
+    lines.push(snapshot.logs.output);
+  }
+  if (!snapshot.logs?.output && snapshot.agents?.output) {
+    lines.push(snapshot.agents.output);
+  }
+  return `${lines.join("\n")}\n`;
+}
+
+function writeMonitorSnapshot(snapshot, asJson) {
+  process.stdout.write(asJson ? `${JSON.stringify(snapshot)}\n` : renderMonitorSnapshot(snapshot));
+}
+
+function handleMonitor(argv) {
   const { options, positionals } = parseArgs(argv);
   const ctx = currentContext(options);
   const job = findJob(ctx, positionals[0]);
   if (!job) {
+    throw new Error("No Claude job found.");
+  }
+  const intervalMs = Number(options["interval-ms"] || DEFAULT_MONITOR_INTERVAL_MS);
+  const maxChecks = options.forever ? Infinity : Number(options["max-checks"] || DEFAULT_MONITOR_CHECKS);
+  for (let index = 0; index < maxChecks; index += 1) {
+    const snapshot = readLiveStatus(job, options);
+    writeMonitorSnapshot(snapshot, options.json);
+    if (!snapshot.active) {
+      break;
+    }
+    if (index < maxChecks - 1) {
+      sleep(intervalMs);
+    }
+  }
+}
+
+function handleStatus(argv) {
+  const { options, positionals } = parseArgs(argv);
+  const ctx = currentContext(options);
+  const job = findJob(ctx, positionals[0]);
+  if (options.watch || options.follow) {
+    handleMonitor(argv);
+    return;
+  }
+  if (!job) {
     output({ jobs: ctx.state.jobs }, options.json);
     return;
   }
-  let live = null;
-  if (job.claudeSessionId) {
-    const result = runClaude(["logs", job.claudeSessionId], { timeoutMs: 10000 });
-    live = { available: result.status === 0, output: result.stdout || result.stderr };
-  }
+  const live = job.claudeSessionId ? readLiveStatus(job, options) : null;
   output({ job, live }, options.json);
 }
 
@@ -383,11 +481,12 @@ function printUsage() {
     [
       "Usage:",
       "  claude-companion setup [--json]",
-      "  claude-companion advise [--background] [--write] [prompt]",
-      "  claude-companion rescue [--background] [--write] [--resume] [prompt]",
-      "  claude-companion review [--base <ref>] [--json]",
-      "  claude-companion adversarial-review [--base <ref>] [focus] [--json]",
-      "  claude-companion status [job-id] [--json]",
+      "  claude-companion advise [--background] [--write] [--effort <level>] [prompt]",
+      "  claude-companion rescue [--background] [--write] [--resume] [--effort <level>] [prompt]",
+      "  claude-companion review [--base <ref>] [--effort <level>] [--json]",
+      "  claude-companion adversarial-review [--base <ref>] [--effort <level>] [focus] [--json]",
+      "  claude-companion monitor [job-id] [--interval-ms <ms>] [--max-checks <n>] [--json]",
+      "  claude-companion status [job-id] [--watch] [--json]",
       "  claude-companion result [job-id] [--json]",
       "  claude-companion cancel [job-id] [--json]",
       "  claude-companion resume-candidate [--json]"
@@ -419,6 +518,9 @@ async function main() {
       break;
     case "status":
       handleStatus(argv);
+      break;
+    case "monitor":
+      handleMonitor(argv);
       break;
     case "result":
       handleResult(argv);

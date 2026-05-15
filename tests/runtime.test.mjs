@@ -68,6 +68,16 @@ test("buildClaudeArgs requires explicit write for write-capable mode", () => {
   );
 });
 
+test("buildClaudeArgs passes explicit effort", () => {
+  const args = buildClaudeArgs({
+    mode: "advise",
+    prompt: "check this",
+    effort: "xhigh"
+  });
+
+  assert.deepEqual(args.slice(args.indexOf("--effort"), args.indexOf("--effort") + 2), ["--effort", "xhigh"]);
+});
+
 test("parseBackgroundLaunch extracts Claude background id", () => {
   const output = [
     "Starting background service...",

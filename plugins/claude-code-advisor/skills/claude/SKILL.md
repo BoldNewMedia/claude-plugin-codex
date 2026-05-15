@@ -24,6 +24,7 @@ $claude advise <question>
 $claude rescue [--background] [--write] [--resume] <task>
 $claude review [--base <ref>]
 $claude adversarial-review [--base <ref>] [focus]
+$claude monitor [job-id]
 $claude status [job-id]
 $claude result [job-id]
 $claude cancel [job-id]
@@ -40,6 +41,7 @@ routing:
 /claude:rescue <task> -> $claude rescue <task>
 /claude:review [--base <ref>] -> $claude review [--base <ref>]
 /claude:adversarial-review [focus] -> $claude adversarial-review [focus]
+/claude:monitor [job-id] -> $claude monitor [job-id]
 /claude:status [job-id] -> $claude status [job-id]
 /claude:result [job-id] -> $claude result [job-id]
 /claude:cancel [job-id] -> $claude cancel [job-id]
@@ -54,9 +56,16 @@ commands. The guaranteed Codex surface is the `$claude` skill mention.
   using an absolute path. The plugin root is the `claude-code-advisor`
   directory that contains `.codex-plugin/`, `skills/`, and `scripts/`.
 - Do not call `claude` directly from the skill instructions.
-- Return companion output exactly unless the user asks for a summary.
+- Return a concise human summary unless the user asks for raw JSON.
 - Review and adversarial-review are read-only.
 - Write-capable Claude work requires explicit `--write`.
+- Do not pass `--model sonnet` for advice, review, adversarial-review, rescue,
+  or monitor work unless the user explicitly asks for Sonnet. Let Claude Code
+  use the user's configured default model.
+- Pass `--effort xhigh` for advice, review, adversarial-review, rescue, and
+  background jobs unless the user explicitly asks for another effort.
+- Sonnet is reserved for junior-agent delegation governed by the
+  `tasks-for-sonnet` skill, not for this Claude advisor path.
 - Do not auto-resume a Claude job when the companion says explicit selection
   is required.
 
@@ -66,12 +75,27 @@ commands. The guaranteed Codex surface is the `$claude` skill mention.
 - `advise`: use for architecture questions, second opinions, and checker work.
 - `rescue`: use for substantial task handoff, debugging, implementation help,
   or follow-up work. It is read-only unless `--write` is explicit.
+- `monitor`: use after a background advise or rescue job to poll Claude logs
+  and active agent state. Default to `--interval-ms 30000`.
 - `review`: use for ordinary read-only review of local git state.
 - `adversarial-review`: use for challenge reviews, plan attacks, and harness
   checker passes.
 - `status`, `result`, `cancel`: use for managed Claude jobs only.
 - `resume-candidate`: use before follow-up work when the user did not provide a
   job id and the request sounds like "continue", "resume", or "dig deeper".
+
+For long-running work, prefer:
+
+```bash
+node "<plugin root>/scripts/claude-companion.mjs" rescue --background "<task>"
+node "<plugin root>/scripts/claude-companion.mjs" monitor <job-id> --interval-ms 30000
+```
+
+For a vague request like "check with Claude", ask a short clarification unless
+the user clearly wants setup/readiness. If they want setup/readiness, run
+`setup`. If they want Claude to inspect a plan, diff, or question, run `advise`
+with a concrete prompt. Use `--background` for anything likely to take more
+than one short answer.
 
 ## Commands
 
@@ -86,5 +110,7 @@ Examples:
 ```bash
 node "<plugin root>/scripts/claude-companion.mjs" setup --json
 node "<plugin root>/scripts/claude-companion.mjs" adversarial-review --base main --json
+node "<plugin root>/scripts/claude-companion.mjs" advise --background --effort xhigh "<question>"
+node "<plugin root>/scripts/claude-companion.mjs" monitor <job-id> --interval-ms 30000
 node "<plugin root>/scripts/claude-companion.mjs" status --json
 ```

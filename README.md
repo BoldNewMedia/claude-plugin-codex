@@ -45,6 +45,7 @@ The stable command form is `$claude`. If your Codex UI exposes the skill as
   read-only unless you pass `--write`.
 - `$claude review` runs a structured read-only review of local git state.
 - `$claude adversarial-review` asks Claude to challenge a plan or diff.
+- `$claude monitor` polls a background Claude job and shows recent logs.
 - `$claude status`, `$claude result`, and `$claude cancel` manage Claude jobs.
 
 Slash-style aliases are best-effort. Codex plugin manifests do not yet expose a
@@ -90,6 +91,7 @@ Use `$claude` in a Codex thread:
 $claude setup
 $claude advise should this plan use a background worker?
 $claude rescue --background investigate the flaky integration test
+$claude monitor <job-id>
 $claude rescue --write fix the failing test with the smallest safe patch
 $claude review --base main
 $claude adversarial-review challenge the state management assumptions
@@ -106,6 +108,12 @@ same skill.
 Review and adversarial review are read-only. `advise` and `rescue` are also
 read-only unless you pass `--write`. Write-capable Claude work is recorded as a
 separate job type.
+
+The plugin does not force Sonnet for advisor, review, adversarial-review, or
+rescue work. It lets Claude Code use your configured default model unless you
+explicitly pass another model. It uses xhigh effort by default for Claude
+advisor work. Sonnet belongs in junior-agent delegation workflows, not in the
+default advisor path.
 
 The companion runtime tracks jobs by workspace and Codex thread ID when Codex
 provides one. If it cannot safely infer a thread, it requires an explicit job
@@ -183,6 +191,9 @@ through the installed skill.
 - Background mode is optional. If the companion cannot verify `claude --bg`,
   `claude agents`, `claude logs`, `claude attach`, and `claude stop`, it
   degrades to foreground-only behavior.
+- `$claude monitor` checks a background job every 30 seconds by default. It
+  reads `claude logs` and `claude agents` so Codex can see progress and whether
+  the Claude session is still active.
 - Structured review depends on Claude returning valid JSON inside the
   `--output-format json` result envelope. The companion validates and retries
   once before failing.

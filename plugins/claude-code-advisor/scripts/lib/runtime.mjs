@@ -135,7 +135,8 @@ export function buildClaudeArgs(options) {
     maxTurns = 3,
     write = false,
     resumeSessionId = null,
-    model = null
+    model = null,
+    effort = null
   } = options;
 
   if (write === "implicit") {
@@ -155,6 +156,9 @@ export function buildClaudeArgs(options) {
   if (model) {
     args.push("--model", model);
   }
+  if (effort) {
+    args.push("--effort", effort);
+  }
 
   if (write) {
     args.push("--permission-mode", "default");
@@ -167,7 +171,7 @@ export function buildClaudeArgs(options) {
   return args;
 }
 
-export function buildBackgroundArgs({ prompt, name, write = false, model = null }) {
+export function buildBackgroundArgs({ prompt, name, write = false, model = null, effort = null }) {
   if (!prompt || !String(prompt).trim()) {
     throw new Error("A prompt is required.");
   }
@@ -177,6 +181,9 @@ export function buildBackgroundArgs({ prompt, name, write = false, model = null 
   }
   if (model) {
     args.push("--model", model);
+  }
+  if (effort) {
+    args.push("--effort", effort);
   }
   if (!write) {
     args.push("--tools", "Read,WebFetch,WebSearch", "--permission-mode", "plan");
@@ -262,6 +269,16 @@ export function buildReviewPrompt({ kind, targetLabel, gitContext, focus = "" })
 export function renderHuman(value) {
   if (typeof value === "string") {
     return value;
+  }
+  if (value && typeof value === "object" && "jobId" in value && "status" in value && "output" in value) {
+    const output = String(value.output || "").trim();
+    if (value.status === "completed") {
+      return output ? `${output}\n` : `Claude job ${value.jobId} completed.\n`;
+    }
+    if (value.status === "running") {
+      return `Claude job ${value.jobId} is running${value.claudeSessionId ? ` as ${value.claudeSessionId}` : ""}.\n`;
+    }
+    return [`Claude job ${value.jobId} ${value.status}.`, output].filter(Boolean).join("\n") + "\n";
   }
   return `${JSON.stringify(value, null, 2)}\n`;
 }

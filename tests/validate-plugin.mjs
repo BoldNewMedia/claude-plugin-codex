@@ -22,5 +22,8 @@ assert.ok(fs.existsSync("tests/e2e-codex-skill.mjs"));
 assert.match(skill, /^---\nname: claude\n/m);
 assert.match(skill, /claude-companion\.mjs/);
 assert.match(skill, /\/claude:rescue/);
+assert.match(skill, /\$claude monitor/);
+assert.match(skill, /Do not pass `--model sonnet`/);
+assert.match(skill, /`--effort xhigh`/);
 
 console.log("plugin metadata ok");

@@ -24,6 +24,18 @@ Codex remains the orchestrator.
 - Run `npm run test:e2e:codex` after changes that affect Codex plugin routing,
   skill instructions, or public install behavior.
 
+## Claude Model Policy
+
+- Do not default Claude advisor, review, adversarial-review, rescue, or monitor
+  work to Sonnet.
+- Let Claude Code use the user's configured default model unless the user
+  explicitly asks for another model.
+- Pass xhigh effort for Claude advisor, review, adversarial-review, rescue, and
+  background work unless the user explicitly asks for another effort.
+- Use Sonnet only for junior-agent delegation governed by the
+  `tasks-for-sonnet` skill, where Sonnet acts as Hands, scout, verifier, or
+  synthesis worker.
+
 ## Documentation
 
 - Put public install instructions near the top of `README.md`.
