@@ -1,8 +1,8 @@
 # claude-plugin-codex
 
-Use Claude Code from Codex as an advisor, checker, reviewer, or rescue worker.
-Codex stays in charge of the thread; Claude Code gives a second pass through
-the local `claude` CLI.
+Use local Claude Code from Codex for advice, reviews, adversarial checks, and
+rescue tasks. Codex stays in charge of the thread; Claude Code gives a second
+pass through the local `claude` CLI.
 
 This is the inverse of `openai/codex-plugin-cc`: instead of using Codex from
 Claude Code, it uses the local Claude Code CLI from Codex through a managed
@@ -10,10 +10,10 @@ companion runtime.
 
 ## Status
 
-Private alpha. The plugin is useful for local testing, but the Codex skill
-surface is still being verified across Codex builds. Treat `/claude` as an
-alias only if your Codex UI exposes it; the guaranteed v1 contract is explicit
-skill mention with `$claude`.
+Alpha. The plugin is useful for local testing, and the Codex marketplace flow
+has been verified with Codex CLI `0.130.0`. Treat `/claude` as an alias only if
+your Codex UI exposes it; the guaranteed v1 contract is explicit skill mention
+with `$claude`.
 
 ## What You Get
 
@@ -36,19 +36,37 @@ skill mention with `$claude`.
 
 ## Install Locally
 
+From GitHub:
+
+```bash
+codex plugin marketplace add yanchuk/claude-plugin-codex
+```
+
 From this repository:
 
 ```bash
 codex plugin marketplace add ./
 ```
 
-Then restart Codex and install `claude-code-advisor` from the plugin directory.
+Then open Codex's plugin directory, find the `Claude Plugin Codex`
+marketplace, and install `Claude Code Advisor`.
+
+After installation, new Codex sessions should load the skill as
+`claude-code-advisor:claude`. Codex writes an enabled plugin entry similar to:
+
+```toml
+[plugins."claude-code-advisor@claude-plugin-codex"]
+enabled = true
+```
 
 Check Claude Code readiness:
 
 ```text
 $claude setup
 ```
+
+If Codex was already running when you added or installed the marketplace, start
+a new Codex thread or restart Codex before testing `$claude setup`.
 
 ## Usage
 
@@ -85,6 +103,22 @@ Claude Code must already be installed and authenticated on the host:
 claude auth login
 ```
 
+## Privacy
+
+This plugin does not run a hosted service. It executes the local Claude Code CLI
+on your machine. Prompts, file context, and command output sent to Claude Code
+are handled by your local Claude Code installation and Anthropic account.
+
+The plugin stores job metadata and results under your local Codex home directory
+so `$claude status`, `$claude result`, and `$claude cancel` can work across
+turns. It does not intentionally collect analytics, phone home, or send data to
+the repository owner.
+
+## Terms
+
+This project is provided under the MIT License. You are responsible for your use
+of Codex, Claude Code, and any data you choose to send through those tools.
+
 ## How It Works
 
 The `claude` skill is intentionally thin. It routes every request to:
@@ -116,6 +150,17 @@ Optional smoke test against the installed Claude CLI:
 npm run test:smoke
 CLAUDE_PLUGIN_CODEX_RUN_BG_SMOKE=1 npm run test:smoke
 ```
+
+Optional end-to-end smoke test against an installed Codex plugin:
+
+```bash
+npm run test:e2e:codex
+```
+
+This requires `codex plugin marketplace add ./`, `Claude Code Advisor`
+installed from Codex's plugin directory, and Claude Code already logged in. It
+starts a fresh `codex exec` session and verifies that `$claude setup` routes
+through the installed skill.
 
 ## Current Limits
 

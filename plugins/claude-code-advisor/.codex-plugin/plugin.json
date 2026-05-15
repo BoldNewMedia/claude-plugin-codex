@@ -1,7 +1,7 @@
 {
   "name": "claude-code-advisor",
   "version": "0.1.0",
-  "description": "Use Claude Code from Codex as an advisor, checker, and reviewer while Codex remains the orchestrator.",
+  "description": "Use local Claude Code from Codex for advice, reviews, adversarial checks, and rescue tasks while Codex remains the orchestrator.",
   "author": {
     "name": "Yanchuk"
   },
@@ -12,27 +12,32 @@
     "codex",
     "claude-code",
     "review",
+    "rescue",
+    "adversarial-review",
     "harness",
     "advisor"
   ],
   "skills": "./skills/",
   "interface": {
     "displayName": "Claude Code Advisor",
-    "shortDescription": "Use Claude Code from Codex as an advisor, checker, and reviewer.",
-    "longDescription": "Delegates advisory, review, and checker tasks from Codex to the local Claude Code CLI through a managed companion runtime.",
+    "shortDescription": "Consult local Claude Code from Codex.",
+    "longDescription": "Routes Codex requests to the local Claude Code CLI for advice, structured reviews, adversarial checks, and explicit rescue tasks while Codex stays in charge.",
     "developerName": "Yanchuk",
     "category": "Coding",
     "capabilities": [
-      "Read"
+      "Read",
+      "Write"
     ],
     "websiteURL": "https://github.com/yanchuk/claude-plugin-codex",
-    "privacyPolicyURL": "https://docs.github.com/en/site-policy/privacy-policies/github-general-privacy-statement",
-    "termsOfServiceURL": "https://docs.github.com/en/site-policy/github-terms/github-terms-of-service",
+    "privacyPolicyURL": "https://github.com/yanchuk/claude-plugin-codex#privacy",
+    "termsOfServiceURL": "https://github.com/yanchuk/claude-plugin-codex#terms",
     "defaultPrompt": [
       "Use $claude setup to check whether Claude Code is available.",
       "Use $claude adversarial-review to get a Claude Code second opinion on this plan."
     ],
     "brandColor": "#D97706",
+    "composerIcon": "./assets/icon.svg",
+    "logo": "./assets/logo.svg",
     "screenshots": []
   }
 }
