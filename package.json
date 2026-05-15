@@ -1,7 +1,7 @@
 {
   "name": "claude-plugin-codex",
-  "version": "0.1.4",
-  "description": "Codex plugin that lets Codex consult local Claude Code for advice, reviews, adversarial checks, and rescue tasks.",
+  "version": "0.1.6",
+  "description": "Bring local Claude Code into Codex for reviews, adversarial checks, advice, and rescue tasks.",
   "type": "module",
   "private": true,
   "scripts": {

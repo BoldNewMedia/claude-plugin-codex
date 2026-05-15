@@ -73,8 +73,11 @@ commands. The guaranteed Codex surface is the `$claude` skill mention.
 
 - `setup`: run the companion setup command and show the result.
 - `advise`: use for architecture questions, second opinions, and checker work.
+  Use `--background` for substantive prompts, large context, or anything likely
+  to need more than one short answer.
 - `rescue`: use for substantial task handoff, debugging, implementation help,
-  or follow-up work. It is read-only unless `--write` is explicit.
+  or follow-up work. Prefer `--background`. It is read-only unless `--write`
+  is explicit.
 - `monitor`: use after a background advise or rescue job to poll Claude logs
   and active agent state. Default to `--interval-ms 30000`. Prefer the human
   summary unless the user asks for raw JSON; it reports active/stale state, the
@@ -89,6 +92,7 @@ commands. The guaranteed Codex surface is the `$claude` skill mention.
 For long-running work, prefer:
 
 ```bash
+node "<plugin root>/scripts/claude-companion.mjs" advise --background "<question>"
 node "<plugin root>/scripts/claude-companion.mjs" rescue --background "<task>"
 node "<plugin root>/scripts/claude-companion.mjs" monitor <job-id> --interval-ms 30000
 ```
@@ -97,7 +101,9 @@ For a vague request like "check with Claude", ask a short clarification unless
 the user clearly wants setup/readiness. If they want setup/readiness, run
 `setup`. If they want Claude to inspect a plan, diff, or question, run `advise`
 with a concrete prompt. Use `--background` for anything likely to take more
-than one short answer.
+than one short answer. If a foreground `advise` or `rescue` times out, the
+companion automatically launches one background job; monitor that job instead
+of retrying the same prompt.
 
 ## Commands
 

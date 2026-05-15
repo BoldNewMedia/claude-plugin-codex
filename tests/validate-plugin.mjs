@@ -28,6 +28,8 @@ assert.match(skill, /\$claude monitor/);
 assert.match(skill, /Do not pass `--model sonnet`/);
 assert.match(skill, /`--effort xhigh`/);
 assert.match(skill, /--stale-after-ms 120000/);
+assert.match(skill, /automatically launches one background job/);
+assert.match(readme, /--no-background-fallback/);
 assert.match(readme, /Unable to load skill contents/);
 assert.match(readme, /\$claude advise --model sonnet/);
 assert.match(e2e, /--model sonnet/);

@@ -22,13 +22,21 @@ If Codex was already running, start a new thread or restart Codex before using
 
 ## What It Is
 
-Use local Claude Code from Codex for advice, reviews, adversarial checks, and
-rescue tasks. Codex stays in charge of the thread; Claude Code gives a second
-pass through the local `claude` CLI.
+If you already use Codex and Claude Code, this plugin brings Claude Code into
+your Codex workflow. Codex stays in charge of the thread. Claude Code gives a
+second pass through the local `claude` CLI.
 
-This is the inverse of `openai/codex-plugin-cc`: instead of using Codex from
-Claude Code, it uses the local Claude Code CLI from Codex through a managed
-companion runtime.
+Use it for four things:
+
+- a normal read-only Claude review
+- a more skeptical adversarial review
+- a quick second opinion while Codex keeps working
+- a rescue pass when a Codex thread stalls or needs another agent
+
+This is the inverse of
+[`openai/codex-plugin-cc`](https://github.com/openai/codex-plugin-cc). That
+plugin pulls Codex into Claude Code. This one pulls local Claude Code into
+Codex.
 
 ## Status
 
@@ -36,18 +44,27 @@ Alpha. The Codex marketplace flow has been verified with Codex CLI `0.130.0`.
 The stable command form is `$claude`. If your Codex UI exposes the skill as
 `/claude`, you can use that as an alias.
 
-## Commands
+## Core Commands
 
 - `$claude setup` checks whether Claude Code is installed, authenticated, and
   supports the needed CLI features.
-- `$claude advise` asks Claude for a lightweight second opinion.
-- `$claude rescue` hands Claude a debugging or implementation task. It is
-  read-only unless you pass `--write`.
 - `$claude review` runs a structured read-only review of local git state.
 - `$claude adversarial-review` asks Claude to challenge a plan or diff.
+- `$claude advise` asks Claude for a quick second opinion.
+- `$claude rescue` hands Claude a debugging or implementation task. It is
+  read-only unless you pass `--write`.
 - `$claude monitor` polls a background Claude job and reports whether Claude is
   active, stale, or finished.
 - `$claude status`, `$claude result`, and `$claude cancel` manage Claude jobs.
+
+Longer jobs can run in the background:
+
+```text
+$claude advise --background should this VAD tuning loop collect N=5 now?
+$claude rescue --background investigate the flaky integration test
+$claude monitor <job-id>
+$claude result <job-id>
+```
 
 Slash-style aliases are best-effort. Codex plugin manifests do not yet expose a
 documented custom slash-command API, so `$claude` is the portable form. If your
@@ -61,6 +78,21 @@ commands:
 /claude:review --base main
 /claude:adversarial-review challenge the state management assumptions
 ```
+
+## When To Use It
+
+A good default pattern is simple:
+
+- Run `$claude review` for a normal second pass.
+- Run `$claude adversarial-review` when the change is high stakes.
+- Run `$claude advise --background` when you want another model to check a
+  plan, tradeoff, or evidence bundle.
+- Run `$claude rescue --background` when Codex stalls or you want Claude to
+  take a deeper pass.
+
+Adversarial review is especially useful for migrations, auth changes, infra
+scripts, refactors, and work where the danger is hidden assumptions rather than
+syntax errors.
 
 ## Requirements
 
@@ -90,7 +122,7 @@ Use `$claude` in a Codex thread:
 
 ```text
 $claude setup
-$claude advise should this plan use a background worker?
+$claude advise --background should this plan use a background worker?
 $claude rescue --background investigate the flaky integration test
 $claude monitor <job-id>
 $claude rescue --write fix the failing test with the smallest safe patch
@@ -118,11 +150,23 @@ JSON output, but the human view shows the useful signal: whether Claude is
 active, the last meaningful line, how long output has been stale, and what to
 do next.
 
+`status` and `monitor` save the latest useful Claude output, so `result` can
+recover it later even if you cancel the job or Claude's live log socket is gone.
+
+Foreground `advise` and `rescue` calls have a two-minute timeout. If one times
+out, the companion records the timed-out attempt and starts one background job
+for the same prompt. Use `--background` up front for real advisor work; use
+`--no-background-fallback` only when you want a timeout to fail fast.
+
 ## Safety
 
 Review and adversarial review are read-only. `advise` and `rescue` are also
 read-only unless you pass `--write`. Write-capable Claude work is recorded as a
 separate job type.
+
+Managed Claude jobs ignore inherited MCP server config by default. This keeps
+advisor and rescue runs from blocking on an interactive "enable MCP servers?"
+prompt inside Codex.
 
 The plugin does not force Sonnet for advisor, review, adversarial-review, or
 rescue work. It lets Claude Code use your configured default model unless you

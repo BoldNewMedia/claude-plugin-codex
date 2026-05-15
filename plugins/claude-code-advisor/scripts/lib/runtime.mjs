@@ -159,6 +159,7 @@ export function buildClaudeArgs(options) {
   if (effort) {
     args.push("--effort", effort);
   }
+  args.push("--strict-mcp-config");
 
   if (write) {
     args.push("--permission-mode", "default");
@@ -185,6 +186,7 @@ export function buildBackgroundArgs({ prompt, name, write = false, model = null,
   if (effort) {
     args.push("--effort", effort);
   }
+  args.push("--strict-mcp-config");
   if (!write) {
     args.push("--tools", "Read,WebFetch,WebSearch", "--permission-mode", "plan");
   }

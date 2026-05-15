@@ -5,6 +5,7 @@ import path from "node:path";
 import test from "node:test";
 
 import {
+  buildBackgroundArgs,
   buildClaudeArgs,
   buildReviewPrompt,
   loadState,
@@ -76,6 +77,24 @@ test("buildClaudeArgs passes explicit effort", () => {
   });
 
   assert.deepEqual(args.slice(args.indexOf("--effort"), args.indexOf("--effort") + 2), ["--effort", "xhigh"]);
+});
+
+test("buildClaudeArgs disables inherited MCP config for unattended advisor jobs", () => {
+  const args = buildClaudeArgs({
+    mode: "advise",
+    prompt: "check this"
+  });
+
+  assert.ok(args.includes("--strict-mcp-config"));
+});
+
+test("buildBackgroundArgs disables inherited MCP config for unattended advisor jobs", () => {
+  const args = buildBackgroundArgs({
+    prompt: "check this",
+    name: "codex-advice"
+  });
+
+  assert.ok(args.includes("--strict-mcp-config"));
 });
 
 test("parseBackgroundLaunch extracts Claude background id", () => {

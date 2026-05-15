@@ -1,7 +1,7 @@
 {
   "name": "claude-code-advisor",
-  "version": "0.1.4",
-  "description": "Use local Claude Code from Codex for advice, reviews, adversarial checks, and rescue tasks while Codex remains the orchestrator.",
+  "version": "0.1.6",
+  "description": "Bring local Claude Code into Codex for reviews, adversarial checks, advice, and rescue tasks.",
   "author": {
     "name": "Yanchuk"
   },
@@ -21,7 +21,7 @@
   "interface": {
     "displayName": "Claude",
     "shortDescription": "Ask local Claude Code from Codex.",
-    "longDescription": "Routes Codex requests to the local Claude Code CLI for advice, structured reviews, adversarial checks, and explicit rescue tasks while Codex stays in charge.",
+    "longDescription": "Use local Claude Code from Codex for read-only reviews, adversarial checks, quick advice, and explicit rescue tasks while Codex stays in charge.",
     "developerName": "Yanchuk",
     "category": "Coding",
     "capabilities": [

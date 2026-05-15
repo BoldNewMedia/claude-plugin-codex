@@ -106,6 +106,16 @@ console.error("unsupported"); process.exit(2);
   });
   assert.equal(JSON.parse(cancel).status, "cancelled");
   assert.equal(fs.readFileSync(stopLog, "utf8"), "bg123");
+
+  const result = execFileSync(process.execPath, [companion.pathname, "result", payload.jobId, "--json"], {
+    env,
+    cwd: stateRoot,
+    encoding: "utf8"
+  });
+  const stored = JSON.parse(result);
+  assert.equal(stored.job.status, "cancelled");
+  assert.equal(stored.result, "latest output");
+  assert.equal(stored.job.lastMeaningfulOutput, "latest output");
 });
 
 test("monitor polls Claude logs and active agent state", () => {
@@ -135,6 +145,15 @@ console.error("unsupported"); process.exit(2);
   assert.equal(snapshots.length, 2);
   assert.equal(snapshots[0].active, true);
   assert.equal(snapshots[0].logs.output, "progress: still working");
+
+  const result = execFileSync(process.execPath, [companion.pathname, "result", job.jobId, "--json"], {
+    env,
+    cwd: stateRoot,
+    encoding: "utf8"
+  });
+  const stored = JSON.parse(result);
+  assert.equal(stored.result, "progress: still working");
+  assert.equal(stored.job.lastMonitorSnapshot.summary.lastMeaningfulLine, "progress: still working");
 });
 
 test("monitor summarizes meaningful progress and stale repeated logs", () => {
@@ -145,7 +164,9 @@ if (args[0] === "--bg") { console.log("backgrounded · bg123 (idle - send a prom
 if (args[0] === "logs") {
   console.log("Claude Code");
   console.log("✻ Thinking with xhigh effort");
+  console.log("❯");
   console.log("progress: compiling tests");
+  console.log("Zigzagging…");
   process.exit(0);
 }
 if (args[0] === "agents") { console.log("bg123 running"); process.exit(0); }
@@ -191,6 +212,55 @@ console.error("unsupported"); process.exit(2);
   );
   assert.match(human, /Last meaningful output: progress: compiling tests/);
   assert.doesNotMatch(human, /Thinking with xhigh effort/);
+});
+
+test("monitor treats cooked Claude background logs as completed and extracts the answer", () => {
+  const fake = makeFakeClaude(`
+const args = process.argv.slice(2);
+if (args[0] === "--bg") { console.log("backgrounded · bg123 (idle - send a prompt to start)"); process.exit(0); }
+if (args[0] === "logs") {
+  console.log("Claude Codev2.1.132");
+  console.log("▝▜█████▛▘Opus 4.7 with xhigh effort");
+  console.log("▘▘ ▝▝  ~/Documents/GitHub/claude-plugin-codex");
+  console.log("❯ Return exactly PASS.");
+  console.log("✳Hyperspacing…");
+  console.log("Whisking…2");
+  console.log("⏺PASS");
+  console.log("✻Worked for 6s");
+  console.log("❯");
+  process.exit(0);
+}
+if (args[0] === "agents") { console.log("11 active agents"); process.exit(0); }
+console.error("unsupported"); process.exit(2);
+`);
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "claude-state-"));
+  const env = { ...process.env, PATH: `${fake.dir}:${process.env.PATH}`, CLAUDE_COMPANION_STATE_ROOT: stateRoot };
+  const launched = execFileSync(process.execPath, [companion.pathname, "advise", "--background", "check architecture", "--json"], {
+    env,
+    cwd: stateRoot,
+    encoding: "utf8"
+  });
+  const job = JSON.parse(launched);
+  const watched = execFileSync(process.execPath, [companion.pathname, "monitor", job.jobId, "--json"], {
+    env,
+    cwd: stateRoot,
+    encoding: "utf8"
+  });
+  const snapshot = JSON.parse(watched.trim());
+
+  assert.equal(snapshot.active, false);
+  assert.equal(snapshot.completed, true);
+  assert.equal(snapshot.summary.state, "inactive");
+  assert.equal(snapshot.summary.lastMeaningfulLine, "PASS");
+
+  const result = execFileSync(process.execPath, [companion.pathname, "result", job.jobId, "--json"], {
+    env,
+    cwd: stateRoot,
+    encoding: "utf8"
+  });
+  const stored = JSON.parse(result);
+  assert.equal(stored.job.status, "completed");
+  assert.equal(stored.result, "PASS");
 });
 
 test("foreground advise defaults to a larger turn budget", () => {
@@ -269,6 +339,62 @@ console.error("unsupported"); process.exit(2);
 
   assert.equal(payload.status, "running");
   assert.equal(payload.claudeSessionId, "bg123");
+});
+
+test("foreground advise falls back to background on timeout", () => {
+  const fake = makeFakeClaude(`
+const args = process.argv.slice(2);
+if (args[0] === "--bg") {
+  console.log("backgrounded · bg123 (idle - send a prompt to start)");
+  process.exit(0);
+}
+if (args.includes("-p")) {
+  setTimeout(() => {}, 5000);
+}
+console.error("unsupported"); process.exit(2);
+`);
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "claude-state-"));
+  const env = { ...process.env, PATH: `${fake.dir}:${process.env.PATH}`, CLAUDE_COMPANION_STATE_ROOT: stateRoot };
+  const stdout = execFileSync(
+    process.execPath,
+    [companion.pathname, "advise", "--timeout-ms", "50", "check architecture", "--json"],
+    { env, cwd: stateRoot, encoding: "utf8" }
+  );
+  const payload = JSON.parse(stdout);
+
+  assert.equal(payload.status, "running");
+  assert.equal(payload.claudeSessionId, "bg123");
+  assert.match(payload.output, /Foreground Claude timed out/);
+
+  const status = execFileSync(process.execPath, [companion.pathname, "status", payload.jobId, "--json"], {
+    env,
+    cwd: stateRoot,
+    encoding: "utf8"
+  });
+  assert.equal(JSON.parse(status).job.fallbackReason, "foreground-timeout");
+});
+
+test("foreground advise can disable timeout background fallback", () => {
+  const fake = makeFakeClaude(`
+const args = process.argv.slice(2);
+if (args.includes("-p")) {
+  setTimeout(() => {}, 5000);
+}
+console.error("unsupported"); process.exit(2);
+`);
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "claude-state-"));
+  const result = spawnSync(
+    process.execPath,
+    [companion.pathname, "advise", "--timeout-ms", "50", "--no-background-fallback", "slow"],
+    {
+      env: { ...process.env, PATH: `${fake.dir}:${process.env.PATH}`, CLAUDE_COMPANION_STATE_ROOT: stateRoot },
+      cwd: stateRoot,
+      encoding: "utf8"
+    }
+  );
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /timed out/);
 });
 
 test("foreground advise prints human output by default", () => {
@@ -355,7 +481,7 @@ test("foreground timeout fails the job without hanging", () => {
 setTimeout(() => {}, 5000);
 `);
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "claude-state-"));
-  const result = spawnSync(process.execPath, [companion.pathname, "advise", "--timeout-ms", "50", "slow"], {
+  const result = spawnSync(process.execPath, [companion.pathname, "advise", "--timeout-ms", "50", "--no-background-fallback", "slow"], {
     env: { ...process.env, PATH: `${fake.dir}:${process.env.PATH}`, CLAUDE_COMPANION_STATE_ROOT: stateRoot },
     cwd: stateRoot,
     encoding: "utf8"

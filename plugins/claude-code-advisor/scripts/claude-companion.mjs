@@ -43,7 +43,11 @@ function parseArgs(argv) {
       continue;
     }
     const key = arg.slice(2);
-    if (["json", "background", "write", "resume", "fresh", "watch", "follow", "forever"].includes(key)) {
+    if (
+      ["json", "background", "write", "resume", "fresh", "watch", "follow", "forever", "no-background-fallback"].includes(
+        key
+      )
+    ) {
       options[key] = true;
       continue;
     }
@@ -78,15 +82,78 @@ function stripTerminalControl(value) {
     .join("\n");
 }
 
+function normalizeLogLine(line) {
+  return String(line || "")
+    .trim()
+    .replace(/^⏺\s*/, "")
+    .trim();
+}
+
+function isCompletedLogOutput(output) {
+  return /(?:^|\n)\s*[✢✳✶✻✽·]?\s*(?:cooked|churned|worked) for \d+/i.test(String(output || ""));
+}
+
 function isMeaningfulLogLine(line) {
-  const text = String(line || "").trim();
+  const text = normalizeLogLine(line);
   if (!text) {
+    return false;
+  }
+  const withoutSpinner = text.replace(/^[✢✳✶✻✽·\s]+/, "");
+  if (text.length < 3) {
+    return false;
+  }
+  if (/^[━─▐▛▜▝▘▌█\s]+$/.test(text)) {
+    return false;
+  }
+  if (text.includes("~/") || /^~?\//.test(text) || /\/effort\b/i.test(text)) {
+    return false;
+  }
+  if (/codex-[a-z]+-/i.test(text)) {
+    return false;
+  }
+  if (/^[❯>]+$/.test(text)) {
+    return false;
+  }
+  if (/^❯/.test(text)) {
     return false;
   }
   if (/^claude code$/i.test(text)) {
     return false;
   }
+  if (/claude codev?\d/i.test(text)) {
+    return false;
+  }
+  if (/opus|sonnet|haiku|claude max/i.test(text)) {
+    return false;
+  }
   if (/thinking with .* effort/i.test(text)) {
+    return false;
+  }
+  if (/^(zigzagging|hyperspacing|whisking|thinking|cooking|cooked|churned|worked)\b/i.test(withoutSpinner)) {
+    return false;
+  }
+  if (/^[a-z]{1,3}$/i.test(withoutSpinner)) {
+    return false;
+  }
+  if (/^[a-z]+…\d*$/i.test(withoutSpinner)) {
+    return false;
+  }
+  if (/^\(\d+s\s+·\s+↓\d+\s+tokens\)$/i.test(withoutSpinner)) {
+    return false;
+  }
+  if (/^running .* hook\b/i.test(withoutSpinner)) {
+    return false;
+  }
+  if (/^ctx:\d+%/i.test(withoutSpinner)) {
+    return false;
+  }
+  if (/^claude in chrome\b/i.test(withoutSpinner)) {
+    return false;
+  }
+  if (/^try "/i.test(withoutSpinner)) {
+    return false;
+  }
+  if (/plan mode on/i.test(text)) {
     return false;
   }
   if (/^(esc|ctrl|shift|enter|tab)\b/i.test(text)) {
@@ -104,7 +171,7 @@ function isMeaningfulLogLine(line) {
 function extractMeaningfulLogLines(output) {
   return stripTerminalControl(output)
     .split(/\r?\n/)
-    .map((line) => line.trim())
+    .map(normalizeLogLine)
     .filter(isMeaningfulLogLine);
 }
 
@@ -137,6 +204,10 @@ function runClaude(args, options = {}) {
     stdout: result.stdout || "",
     stderr: result.stderr || ""
   };
+}
+
+function isTimeoutError(error) {
+  return /timed out after \d+ms/i.test(String(error?.message || error || ""));
 }
 
 function commandAvailable(commandArgs) {
@@ -267,7 +338,34 @@ function runForeground(ctx, kind, prompt, options = {}) {
     model: options.model || null,
     effort: options.effort || DEFAULT_CLAUDE_EFFORT
   });
-  const result = runClaude(args, { cwd: ctx.cwd, timeoutMs: Number(options.timeoutMs || DEFAULT_TIMEOUT_MS) });
+  let result;
+  try {
+    result = runClaude(args, { cwd: ctx.cwd, timeoutMs: Number(options.timeoutMs || DEFAULT_TIMEOUT_MS) });
+  } catch (error) {
+    if (isTimeoutError(error) && !options["no-background-fallback"]) {
+      completeJob(ctx, job, {
+        status: "timed_out",
+        stderr: error.message,
+        result: error.message
+      });
+      if (ctx.state.capabilities && !ctx.state.capabilities.background) {
+        throw error;
+      }
+      return runBackground(ctx, kind, prompt, {
+        ...options,
+        timeoutMs: options["background-timeout-ms"] || options.backgroundTimeoutMs || 30000,
+        fallbackFromJobId: job.id,
+        fallbackReason: "foreground-timeout",
+        fallbackMessage: `Foreground Claude timed out after ${Number(options.timeoutMs || DEFAULT_TIMEOUT_MS)}ms; launched a background job.`
+      });
+    }
+    completeJob(ctx, job, {
+      status: "failed",
+      stderr: error.message,
+      result: error.message
+    });
+    throw error;
+  }
   const status = result.status === 0 ? "completed" : "failed";
   return completeJob(ctx, job, {
     status,
@@ -302,7 +400,9 @@ function runBackground(ctx, kind, prompt, options = {}) {
     status: "running",
     claudeSessionId,
     stdout: result.stdout,
-    result: result.stdout.trim()
+    result: options.fallbackMessage ? `${options.fallbackMessage}\nClaude session: ${claudeSessionId}` : result.stdout.trim(),
+    fallbackFromJobId: options.fallbackFromJobId || null,
+    fallbackReason: options.fallbackReason || null
   });
   return next;
 }
@@ -406,11 +506,13 @@ function readLiveStatus(job, options = {}) {
   const agentsOutput = stripTerminalControl(`${agents.stdout || ""}${agents.stderr || ""}`);
   const logsOutput = stripTerminalControl(`${logs.stdout || ""}${logs.stderr || ""}`);
   const meaningfulLogLines = extractMeaningfulLogLines(logsOutput);
+  const completed = isCompletedLogOutput(logsOutput);
   return {
     checkedAt: new Date().toISOString(),
     jobId: job.id,
     claudeSessionId: job.claudeSessionId,
-    active: logs.status === 0,
+    active: logs.status === 0 && !completed,
+    completed,
     available: logs.status === 0 || agents.status === 0,
     logs: {
       available: logs.status === 0,
@@ -478,6 +580,30 @@ function summarizeLiveStatus(snapshot, monitorState = {}, options = {}) {
   };
 }
 
+function persistMonitorSnapshot(ctx, job, snapshot) {
+  const summary = snapshot.summary || summarizeLiveStatus(snapshot).summary;
+  const meaningfulOutput = String(snapshot.logs?.meaningfulOutput || "").trim();
+  const patch = {
+    lastMonitoredAt: snapshot.checkedAt,
+    lastMonitorSnapshot: {
+      checkedAt: snapshot.checkedAt,
+      active: snapshot.active,
+      available: snapshot.available,
+      summary,
+      logsAvailable: Boolean(snapshot.logs?.available),
+      agentsAvailable: Boolean(snapshot.agents?.available)
+    }
+  };
+  if (snapshot.completed) {
+    patch.status = "completed";
+  }
+  if (meaningfulOutput) {
+    patch.lastMeaningfulOutput = meaningfulOutput;
+    patch.result = meaningfulOutput;
+  }
+  return completeJob(ctx, job, patch);
+}
+
 function renderMonitorSnapshot(snapshot) {
   const summary = snapshot.summary || summarizeLiveStatus(snapshot).summary;
   const lines = [
@@ -507,7 +633,7 @@ function writeMonitorSnapshot(snapshot, asJson) {
 function handleMonitor(argv) {
   const { options, positionals } = parseArgs(argv);
   const ctx = currentContext(options);
-  const job = findJob(ctx, positionals[0]);
+  let job = findJob(ctx, positionals[0]);
   if (!job) {
     throw new Error("No Claude job found.");
   }
@@ -516,6 +642,7 @@ function handleMonitor(argv) {
   const monitorState = {};
   for (let index = 0; index < maxChecks; index += 1) {
     const snapshot = summarizeLiveStatus(readLiveStatus(job, options), monitorState, options);
+    job = persistMonitorSnapshot(ctx, job, snapshot);
     writeMonitorSnapshot(snapshot, options.json);
     if (!snapshot.active) {
       break;
@@ -539,7 +666,8 @@ function handleStatus(argv) {
     return;
   }
   const live = job.claudeSessionId ? summarizeLiveStatus(readLiveStatus(job, options), {}, options) : null;
-  output({ job, live }, options.json);
+  const updated = live ? persistMonitorSnapshot(ctx, job, live) : job;
+  output({ job: updated, live }, options.json);
 }
 
 function handleResult(argv) {
@@ -559,10 +687,17 @@ function handleCancel(argv) {
   if (!job) {
     throw new Error("No Claude job found.");
   }
+  let latest = job;
   if (job.claudeSessionId) {
+    try {
+      const live = summarizeLiveStatus(readLiveStatus(job, options), {}, options);
+      latest = persistMonitorSnapshot(ctx, job, live);
+    } catch {
+      latest = job;
+    }
     runClaude(["stop", job.claudeSessionId], { timeoutMs: Number(options["timeout-ms"] || 10000) });
   }
-  const cancelled = completeJob(ctx, job, { status: "cancelled" });
+  const cancelled = completeJob(ctx, latest, { status: "cancelled" });
   output({ jobId: cancelled.id, status: "cancelled" }, options.json);
 }
 
@@ -584,8 +719,8 @@ function printUsage() {
     [
       "Usage:",
       "  claude-companion setup [--json]",
-      "  claude-companion advise [--background] [--write] [--effort <level>] [prompt]",
-      "  claude-companion rescue [--background] [--write] [--resume] [--effort <level>] [prompt]",
+      "  claude-companion advise [--background] [--write] [--effort <level>] [--no-background-fallback] [prompt]",
+      "  claude-companion rescue [--background] [--write] [--resume] [--effort <level>] [--no-background-fallback] [prompt]",
       "  claude-companion review [--base <ref>] [--effort <level>] [--json]",
       "  claude-companion adversarial-review [--base <ref>] [--effort <level>] [focus] [--json]",
       "  claude-companion monitor [job-id] [--interval-ms <ms>] [--max-checks <n>] [--stale-after-ms <ms>] [--json]",
