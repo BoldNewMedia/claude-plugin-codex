@@ -43,7 +43,7 @@ const promptInput = run("codex", ["debug", "prompt-input", "Check Claude plugin 
 assert.match(
   promptInput,
   new RegExp(skillMarker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")),
-  "Codex prompt input does not include the installed claude-code-advisor skill. Run `codex plugin marketplace add ./`, install Claude Code Advisor in Codex, and start a fresh Codex session."
+  "Codex prompt input does not include the installed claude-code-advisor skill. Run `codex plugin marketplace add ./`, install Claude in Codex, and start a fresh Codex session."
 );
 
 const statusBefore = run("git", ["status", "--short"]);

@@ -1,9 +1,5 @@
 # claude-plugin-codex
 
-Use local Claude Code from Codex for advice, reviews, adversarial checks, and
-rescue tasks. Codex stays in charge of the thread; Claude Code gives a second
-pass through the local `claude` CLI.
-
 ## Install
 
 Add the public marketplace:
@@ -13,7 +9,7 @@ codex plugin marketplace add yanchuk/claude-plugin-codex
 ```
 
 Then open Codex's plugin directory, find `Claude Plugin Codex`, and install
-`Claude Code Advisor`.
+`Claude`.
 
 Start a new Codex thread and check Claude Code:
 
@@ -24,6 +20,12 @@ $claude setup
 If Codex was already running, start a new thread or restart Codex before using
 `$claude`.
 
+## What It Is
+
+Use local Claude Code from Codex for advice, reviews, adversarial checks, and
+rescue tasks. Codex stays in charge of the thread; Claude Code gives a second
+pass through the local `claude` CLI.
+
 This is the inverse of `openai/codex-plugin-cc`: instead of using Codex from
 Claude Code, it uses the local Claude Code CLI from Codex through a managed
 companion runtime.
@@ -31,8 +33,8 @@ companion runtime.
 ## Status
 
 Alpha. The Codex marketplace flow has been verified with Codex CLI `0.130.0`.
-Treat `/claude` as an alias only if your Codex UI exposes it. The v1 contract
-is explicit skill mention with `$claude`.
+The stable command form is `$claude`. If your Codex UI exposes the skill as
+`/claude`, you can use that as an alias.
 
 ## Commands
 
@@ -44,6 +46,19 @@ is explicit skill mention with `$claude`.
 - `$claude review` runs a structured read-only review of local git state.
 - `$claude adversarial-review` asks Claude to challenge a plan or diff.
 - `$claude status`, `$claude result`, and `$claude cancel` manage Claude jobs.
+
+Slash-style aliases are best-effort. Codex plugin manifests do not yet expose a
+documented custom slash-command API, so `$claude` is the portable form. If your
+Codex build passes slash-style text to skills, these forms map to the same
+commands:
+
+```text
+/claude setup
+/claude:advise should this plan use a background worker?
+/claude:rescue --background investigate the flaky integration test
+/claude:review --base main
+/claude:adversarial-review challenge the state management assumptions
+```
 
 ## Requirements
 
@@ -156,8 +171,8 @@ Optional end-to-end smoke test against an installed Codex plugin:
 npm run test:e2e:codex
 ```
 
-This requires `codex plugin marketplace add ./`, `Claude Code Advisor`
-installed from Codex's plugin directory, and a logged-in Claude Code CLI. It
+This requires `codex plugin marketplace add ./`, `Claude` installed from
+Codex's plugin directory, and a logged-in Claude Code CLI. It
 starts a fresh `codex exec` session and verifies that `$claude setup` routes
 through the installed skill.
 

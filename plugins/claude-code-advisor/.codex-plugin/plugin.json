@@ -19,8 +19,8 @@
   ],
   "skills": "./skills/",
   "interface": {
-    "displayName": "Claude Code Advisor",
-    "shortDescription": "Consult local Claude Code from Codex.",
+    "displayName": "Claude",
+    "shortDescription": "Ask local Claude Code from Codex.",
     "longDescription": "Routes Codex requests to the local Claude Code CLI for advice, structured reviews, adversarial checks, and explicit rescue tasks while Codex stays in charge.",
     "developerName": "Yanchuk",
     "category": "Coding",
@@ -32,8 +32,9 @@
     "privacyPolicyURL": "https://github.com/yanchuk/claude-plugin-codex#privacy",
     "termsOfServiceURL": "https://github.com/yanchuk/claude-plugin-codex#terms",
     "defaultPrompt": [
-      "Use $claude setup to check whether Claude Code is available.",
-      "Use $claude adversarial-review to get a Claude Code second opinion on this plan."
+      "Check Claude Code setup.",
+      "Review this diff with Claude Code.",
+      "Rescue this task with Claude Code."
     ],
     "brandColor": "#D97706",
     "composerIcon": "./assets/icon.svg",

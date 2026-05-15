@@ -16,7 +16,7 @@ advisor, checker, or reviewer.
 
 ## Invocation Contract
 
-Supported forms:
+Canonical forms:
 
 ```text
 $claude setup
@@ -30,9 +30,23 @@ $claude cancel [job-id]
 $claude resume-candidate
 ```
 
-If Codex exposes enabled skills in the slash menu as `/claude`, treat that as
-an alias for the same skill mention contract. Do not assume a separate
-slash-command API.
+If Codex passes slash-style text through to this skill, normalize it before
+routing:
+
+```text
+/claude <subcommand> <args> -> $claude <subcommand> <args>
+/claude:setup -> $claude setup
+/claude:advise <question> -> $claude advise <question>
+/claude:rescue <task> -> $claude rescue <task>
+/claude:review [--base <ref>] -> $claude review [--base <ref>]
+/claude:adversarial-review [focus] -> $claude adversarial-review [focus]
+/claude:status [job-id] -> $claude status [job-id]
+/claude:result [job-id] -> $claude result [job-id]
+/claude:cancel [job-id] -> $claude cancel [job-id]
+```
+
+Do not add or depend on undocumented plugin manifest fields for custom slash
+commands. The guaranteed Codex surface is the `$claude` skill mention.
 
 ## Hard Rules
 
