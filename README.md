@@ -130,6 +130,7 @@ Use `$claude` in a Codex thread:
 $claude setup
 $claude advise --background should this plan use a background worker?
 $claude do --background --model sonnet map this package and cite file:line call sites
+$claude do --background --model opus debug this cross-module failure with a prepared task
 $claude rescue --background investigate the flaky integration test
 $claude monitor <job-id>
 $claude rescue --write fix the failing test with the smallest safe patch
@@ -177,6 +178,12 @@ role, absolute paths, word cap, What Must Be True, Known Constraints, Mechanical
 Verification, and Stop Conditions. Use it for scouts, mappers, verifiers,
 single-concern reviewers, synthesis, or fully specified scaffolding. Do not use
 Sonnet for broad application code that needs judgment.
+
+`$claude do --model opus` is the backup for complex Claude tasks: ambiguous
+debugging, broad refactors, architecture changes, auth, money, migrations, PII,
+provider reliability, AI runtime paths, or work that needs the same level of
+judgment you would reserve for GPT-5.5. Still prepare a specific task with
+paths, constraints, allowed write scope, verification, and stop conditions.
 
 Managed Claude jobs ignore inherited MCP server config by default. This keeps
 advisor and rescue runs from blocking on an interactive "enable MCP servers?"

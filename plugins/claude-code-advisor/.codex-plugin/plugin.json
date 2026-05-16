@@ -1,6 +1,6 @@
 {
   "name": "claude-code-advisor",
-  "version": "0.1.7",
+  "version": "0.1.8",
   "description": "Bring local Claude Code into Codex for reviews, prepared tasks, advice, and rescue work.",
   "author": {
     "name": "Yanchuk"

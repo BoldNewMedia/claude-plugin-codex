@@ -26,6 +26,8 @@ assert.match(skill, /claude-companion\.mjs/);
 assert.match(skill, /\/claude:rescue/);
 assert.match(skill, /\/claude:do/);
 assert.match(skill, /tasks-for-sonnet/);
+assert.match(skill, /\$claude do --model opus/);
+assert.match(skill, /complex\/high-judgment/);
 assert.match(skill, /What Must Be True/);
 assert.match(skill, /Mechanical Verification/);
 assert.match(skill, /\$claude monitor/);
@@ -37,6 +39,7 @@ assert.match(readme, /--no-background-fallback/);
 assert.match(readme, /Unable to load skill contents/);
 assert.match(readme, /\$claude do/);
 assert.match(readme, /tasks-for-sonnet/);
+assert.match(readme, /\$claude do --model opus/);
 assert.match(readme, /\$claude advise --model sonnet/);
 assert.match(e2e, /--model sonnet/);
 

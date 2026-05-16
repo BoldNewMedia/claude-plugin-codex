@@ -22,7 +22,7 @@ Canonical forms:
 ```text
 $claude setup
 $claude advise <question>
-$claude do [--background] [--write] [--model sonnet] <prepared task>
+$claude do [--background] [--write] [--model sonnet|opus] <prepared task>
 $claude rescue [--background] [--write] [--resume] <task>
 $claude review [--base <ref>]
 $claude adversarial-review [--base <ref>] [focus]
@@ -73,6 +73,9 @@ commands. The guaranteed Codex surface is the `$claude` skill mention.
   task from that skill. The prompt must include the role, absolute paths or a
   pinned commit, a word cap, "What Must Be True", "Known Constraints", and
   "Mechanical Verification".
+- Use `$claude do --model opus` for complex/high-judgment Claude tasks when the
+  user asks for or agrees to a stronger Claude worker. Treat Opus as the
+  Claude-side choice for tasks you would not hand to a junior agent.
 - Do not auto-resume a Claude job when the companion says explicit selection
   is required.
 
@@ -85,7 +88,8 @@ commands. The guaranteed Codex surface is the `$claude` skill mention.
 - `do`: use only for a specific prepared task. This is the preferred route when
   the user asks Claude to do coding, exploration, scout, verifier, reviewer, or
   synthesis work. For Sonnet, first apply `tasks-for-sonnet`; then route the
-  prepared task through `do`.
+  prepared task through `do`. For complex/high-judgment tasks, use Opus or the
+  user's configured default powerful model instead of Sonnet.
 - `rescue`: use for substantial task handoff, debugging, implementation help,
   or follow-up work. Prefer `--background`. It is read-only unless `--write`
   is explicit.
@@ -105,6 +109,7 @@ For long-running work, prefer:
 ```bash
 node "<plugin root>/scripts/claude-companion.mjs" advise --background "<question>"
 node "<plugin root>/scripts/claude-companion.mjs" do --background --model sonnet "<prepared task>"
+node "<plugin root>/scripts/claude-companion.mjs" do --background --model opus "<prepared task>"
 node "<plugin root>/scripts/claude-companion.mjs" rescue --background "<task>"
 node "<plugin root>/scripts/claude-companion.mjs" monitor <job-id> --interval-ms 30000
 ```
@@ -164,6 +169,30 @@ Route explicit coding work only after the user agrees to write-capable Claude:
 node "<plugin root>/scripts/claude-companion.mjs" do --background --write --model sonnet --effort xhigh "<prepared task>"
 ```
 
+## Prepared Opus Tasks
+
+Use `$claude do --model opus` when the user asks Claude to do a complex task
+and Sonnet is the wrong executor. Opus is the backup for work that needs the
+same level of judgment you would reserve for GPT-5.5 or the strongest available
+reasoning model.
+
+Use Opus for:
+
+- ambiguous debugging where the failure source is unknown
+- broad multi-file refactors or architecture changes
+- auth, money, migrations, PII, provider reliability, or AI runtime paths
+- tasks where the "how" needs judgment, not only execution against invariants
+- recovery work where Codex needs a strong second agent, not junior hands
+
+Still prepare a specific task before launching Opus. Include the goal, relevant
+absolute paths, constraints, allowed write scope, verification command, and stop
+conditions. Use `--write` only after the user agrees to write-capable Claude.
+
+```bash
+node "<plugin root>/scripts/claude-companion.mjs" do --background --model opus --effort xhigh "<prepared task>"
+node "<plugin root>/scripts/claude-companion.mjs" do --background --write --model opus --effort xhigh "<prepared task>"
+```
+
 ## Commands
 
 When invoked, map the user request to one companion call:
@@ -179,6 +208,7 @@ node "<plugin root>/scripts/claude-companion.mjs" setup --json
 node "<plugin root>/scripts/claude-companion.mjs" adversarial-review --base main --json
 node "<plugin root>/scripts/claude-companion.mjs" advise --background --effort xhigh "<question>"
 node "<plugin root>/scripts/claude-companion.mjs" do --background --model sonnet --effort xhigh "<prepared task>"
+node "<plugin root>/scripts/claude-companion.mjs" do --background --model opus --effort xhigh "<prepared task>"
 node "<plugin root>/scripts/claude-companion.mjs" monitor <job-id> --interval-ms 30000 --stale-after-ms 120000
 node "<plugin root>/scripts/claude-companion.mjs" status --json
 ```
