@@ -220,13 +220,17 @@ const args = process.argv.slice(2);
 if (args[0] === "--bg") { console.log("backgrounded · bg123 (idle - send a prompt to start)"); process.exit(0); }
 if (args[0] === "logs") {
   console.log("Claude Codev2.1.132");
+  console.log("Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.");
+  console.log("at refresh (internal:util/colors:18:31)");
+  console.log("at loadAssertionError (node:assert:28:96)");
   console.log("▝▜█████▛▘Opus 4.7 with xhigh effort");
   console.log("▘▘ ▝▝  ~/Documents/GitHub/claude-plugin-codex");
   console.log("❯ Return exactly PASS.");
   console.log("✳Hyperspacing…");
+  console.log("Honking…2");
   console.log("Whisking…2");
   console.log("⏺PASS");
-  console.log("✻Worked for 6s");
+  console.log("✻Cogitated for 6s");
   console.log("❯");
   process.exit(0);
 }

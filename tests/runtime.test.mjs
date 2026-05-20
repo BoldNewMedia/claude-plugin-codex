@@ -86,6 +86,11 @@ test("buildClaudeArgs disables inherited MCP config for unattended advisor jobs"
   });
 
   assert.ok(args.includes("--strict-mcp-config"));
+  assert.deepEqual(args.slice(args.indexOf("--mcp-config"), args.indexOf("--mcp-config") + 2), [
+    "--mcp-config",
+    '{"mcpServers":{}}'
+  ]);
+  assert.ok(args.includes("--no-chrome"));
 });
 
 test("buildBackgroundArgs disables inherited MCP config for unattended advisor jobs", () => {
@@ -95,6 +100,11 @@ test("buildBackgroundArgs disables inherited MCP config for unattended advisor j
   });
 
   assert.ok(args.includes("--strict-mcp-config"));
+  assert.deepEqual(args.slice(args.indexOf("--mcp-config"), args.indexOf("--mcp-config") + 2), [
+    "--mcp-config",
+    '{"mcpServers":{}}'
+  ]);
+  assert.ok(args.includes("--no-chrome"));
 });
 
 test("parseBackgroundLaunch extracts Claude background id", () => {

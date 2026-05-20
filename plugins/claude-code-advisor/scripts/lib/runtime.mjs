@@ -5,6 +5,7 @@ import path from "node:path";
 
 export const STATE_VERSION = 1;
 export const REVIEW_SEVERITIES = new Set(["BLOCKER", "MAJOR", "MINOR"]);
+export const EMPTY_MCP_CONFIG = '{"mcpServers":{}}';
 
 export function nowIso() {
   return new Date().toISOString();
@@ -159,7 +160,7 @@ export function buildClaudeArgs(options) {
   if (effort) {
     args.push("--effort", effort);
   }
-  args.push("--strict-mcp-config");
+  args.push("--mcp-config", EMPTY_MCP_CONFIG, "--strict-mcp-config", "--no-chrome");
 
   if (write) {
     args.push("--permission-mode", "default");
@@ -186,7 +187,7 @@ export function buildBackgroundArgs({ prompt, name, write = false, model = null,
   if (effort) {
     args.push("--effort", effort);
   }
-  args.push("--strict-mcp-config");
+  args.push("--mcp-config", EMPTY_MCP_CONFIG, "--strict-mcp-config", "--no-chrome");
   if (!write) {
     args.push("--tools", "Read,WebFetch,WebSearch", "--permission-mode", "plan");
   }

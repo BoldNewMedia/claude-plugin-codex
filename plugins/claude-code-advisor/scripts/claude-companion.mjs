@@ -90,7 +90,7 @@ function normalizeLogLine(line) {
 }
 
 function isCompletedLogOutput(output) {
-  return /(?:^|\n)\s*[✢✳✶✻✽·]?\s*(?:cooked|churned|worked) for \d+/i.test(String(output || ""));
+  return /(?:^|\n)\s*[✢✳✶✻✽·]?\s*(?:cogitated|cooked|churned|worked) for \d+/i.test(String(output || ""));
 }
 
 function isMeaningfulLogLine(line) {
@@ -123,13 +123,16 @@ function isMeaningfulLogLine(line) {
   if (/claude codev?\d/i.test(text)) {
     return false;
   }
+  if (/^warning: the 'NO_COLOR' env is ignored/i.test(text) || /^at\s+/.test(text) || /\binternal:/.test(text)) {
+    return false;
+  }
   if (/opus|sonnet|haiku|claude max/i.test(text)) {
     return false;
   }
   if (/thinking with .* effort/i.test(text)) {
     return false;
   }
-  if (/^(zigzagging|hyperspacing|whisking|thinking|cooking|cooked|churned|worked)\b/i.test(withoutSpinner)) {
+  if (/^(zigzagging|hyperspacing|whisking|honking|thinking|cogitated|cooking|cooked|churned|worked)\b/i.test(withoutSpinner)) {
     return false;
   }
   if (/^[a-z]{1,3}$/i.test(withoutSpinner)) {
@@ -186,9 +189,11 @@ function formatDuration(ms) {
 }
 
 function runClaude(args, options = {}) {
+  const env = { ...process.env, NO_COLOR: "1" };
+  delete env.FORCE_COLOR;
   const result = spawnSync("claude", args, {
     cwd: options.cwd || process.cwd(),
-    env: process.env,
+    env,
     encoding: "utf8",
     timeout: options.timeoutMs ?? DEFAULT_TIMEOUT_MS
   });

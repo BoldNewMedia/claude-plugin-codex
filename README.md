@@ -189,6 +189,12 @@ Managed Claude jobs ignore inherited MCP server config by default. This keeps
 advisor and rescue runs from blocking on an interactive "enable MCP servers?"
 prompt inside Codex.
 
+The companion enforces this with strict non-interactive flags:
+
+```bash
+--mcp-config '{"mcpServers":{}}' --strict-mcp-config --no-chrome
+```
+
 The plugin does not force Sonnet for advisor, review, adversarial-review, or
 rescue work. It lets Claude Code use your configured default model unless you
 explicitly pass another model. It uses xhigh effort by default for Claude

@@ -62,6 +62,10 @@ commands. The guaranteed Codex surface is the `$claude` skill mention.
 - Return a concise human summary unless the user asks for raw JSON.
 - Review and adversarial-review are read-only.
 - Write-capable Claude work requires explicit `--write`.
+- Every companion launch must be non-interactive. Keep the runtime's MCP
+  isolation flags: `--mcp-config '{"mcpServers":{}}' --strict-mcp-config
+  --no-chrome`. These are essential; without them Claude Code can stop at the
+  MCP permission picker instead of producing an answer.
 - Do not pass `--model sonnet` for advice, review, adversarial-review, rescue,
   or monitor work unless the user explicitly asks for Sonnet. Let Claude Code
   use the user's configured default model.
@@ -167,6 +171,13 @@ Route explicit coding work only after the user agrees to write-capable Claude:
 
 ```bash
 node "<plugin root>/scripts/claude-companion.mjs" do --background --write --model sonnet --effort xhigh "<prepared task>"
+```
+
+The companion adds strict non-interactive flags automatically. Do not remove or
+work around them when copying commands:
+
+```bash
+--mcp-config '{"mcpServers":{}}' --strict-mcp-config --no-chrome
 ```
 
 ## Prepared Opus Tasks
