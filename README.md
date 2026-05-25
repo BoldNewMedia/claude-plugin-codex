@@ -153,6 +153,11 @@ $claude rescue --background investigate the flaky integration test
 $claude monitor <job-id>
 ```
 
+MCP is off by default. If the workspace has a `.mcp.json`, the companion
+refuses background mode because Claude Code can still open an interactive MCP
+permission picker before returning an answer. Use foreground mode, or pass
+`--allow-mcp` only after the user explicitly asks Claude to use MCP.
+
 The monitor checks Claude every 30 seconds by default. It keeps raw logs in
 JSON output, but the human view shows the useful signal: whether Claude is
 active, the last meaningful line, how long output has been stale, and what to
@@ -194,6 +199,10 @@ The companion enforces this with strict non-interactive flags:
 ```bash
 --mcp-config '{"mcpServers":{}}' --strict-mcp-config --no-chrome
 ```
+
+Background mode has an extra guard: if the current workspace contains
+`.mcp.json`, background launch is blocked unless you pass `--allow-mcp`.
+Do that only after the user explicitly asks Claude to use MCP.
 
 The plugin does not force Sonnet for advisor, review, adversarial-review, or
 rescue work. It lets Claude Code use your configured default model unless you
@@ -277,6 +286,8 @@ through the installed skill. Sonnet is used only for this small routing test.
 - Background mode is optional. If the companion cannot verify `claude --bg`,
   `claude agents`, `claude logs`, `claude attach`, and `claude stop`, it
   degrades to foreground-only behavior.
+- Background mode refuses workspaces with `.mcp.json` unless `--allow-mcp` is
+  explicit. This avoids Claude Code's interactive MCP picker inside Codex.
 - `$claude monitor` checks a background job every 30 seconds by default. It
   reads `claude logs` and `claude agents`, filters routine terminal noise, and
   marks repeated output as stale after two minutes.

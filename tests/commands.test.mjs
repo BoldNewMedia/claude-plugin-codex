@@ -345,6 +345,58 @@ console.error("unsupported"); process.exit(2);
   assert.equal(payload.claudeSessionId, "bg123");
 });
 
+test("background advise refuses project MCP config unless explicitly allowed", () => {
+  const fake = makeFakeClaude(`
+const args = process.argv.slice(2);
+if (args[0] === "--bg") {
+  console.error("background should not launch");
+  process.exit(2);
+}
+console.error("unsupported"); process.exit(2);
+`);
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "claude-state-"));
+  fs.writeFileSync(path.join(stateRoot, ".mcp.json"), '{"mcpServers":{"playwright":{}}}\n', "utf8");
+  const result = spawnSync(process.execPath, [companion.pathname, "advise", "--background", "check architecture", "--json"], {
+    env: { ...process.env, PATH: `${fake.dir}:${process.env.PATH}`, CLAUDE_COMPANION_STATE_ROOT: stateRoot },
+    cwd: stateRoot,
+    encoding: "utf8"
+  });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /\.mcp\.json/);
+  assert.match(result.stderr, /--allow-mcp/);
+});
+
+test("background advise allows project MCP only with explicit opt-in", () => {
+  const fake = makeFakeClaude(`
+const args = process.argv.slice(2);
+if (args[0] === "--bg") {
+  if (args.includes("--mcp-config") || args.includes("--strict-mcp-config")) {
+    console.error("expected explicit MCP opt-in to avoid empty strict config");
+    process.exit(2);
+  }
+  console.log("backgrounded · bg123 (idle - send a prompt to start)");
+  process.exit(0);
+}
+console.error("unsupported"); process.exit(2);
+`);
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "claude-state-"));
+  fs.writeFileSync(path.join(stateRoot, ".mcp.json"), '{"mcpServers":{"playwright":{}}}\n', "utf8");
+  const stdout = execFileSync(
+    process.execPath,
+    [companion.pathname, "advise", "--background", "--allow-mcp", "check architecture", "--json"],
+    {
+      env: { ...process.env, PATH: `${fake.dir}:${process.env.PATH}`, CLAUDE_COMPANION_STATE_ROOT: stateRoot },
+      cwd: stateRoot,
+      encoding: "utf8"
+    }
+  );
+  const payload = JSON.parse(stdout);
+
+  assert.equal(payload.status, "running");
+  assert.equal(payload.claudeSessionId, "bg123");
+});
+
 test("foreground advise falls back to background on timeout", () => {
   const fake = makeFakeClaude(`
 const args = process.argv.slice(2);

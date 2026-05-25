@@ -62,10 +62,14 @@ commands. The guaranteed Codex surface is the `$claude` skill mention.
 - Return a concise human summary unless the user asks for raw JSON.
 - Review and adversarial-review are read-only.
 - Write-capable Claude work requires explicit `--write`.
-- Every companion launch must be non-interactive. Keep the runtime's MCP
-  isolation flags: `--mcp-config '{"mcpServers":{}}' --strict-mcp-config
-  --no-chrome`. These are essential; without them Claude Code can stop at the
-  MCP permission picker instead of producing an answer.
+- Every default companion launch must be non-interactive. Keep the runtime's
+  MCP isolation flags: `--mcp-config '{"mcpServers":{}}'
+  --strict-mcp-config --no-chrome`. These are essential for unattended runs;
+  without them Claude Code can stop at the MCP permission picker instead of
+  producing an answer.
+- Do not use project MCP servers unless the user explicitly asks for MCP.
+  Background mode must refuse workspaces with `.mcp.json` unless `--allow-mcp`
+  is explicit. Use `--allow-mcp` only after that explicit user approval.
 - Do not pass `--model sonnet` for advice, review, adversarial-review, rescue,
   or monitor work unless the user explicitly asks for Sonnet. Let Claude Code
   use the user's configured default model.
@@ -117,6 +121,11 @@ node "<plugin root>/scripts/claude-companion.mjs" do --background --model opus "
 node "<plugin root>/scripts/claude-companion.mjs" rescue --background "<task>"
 node "<plugin root>/scripts/claude-companion.mjs" monitor <job-id> --interval-ms 30000
 ```
+
+If the companion refuses background mode because the workspace contains
+`.mcp.json`, do not retry background blindly. Use foreground mode, or ask the
+user whether Claude should use MCP and rerun with `--allow-mcp` only if they
+explicitly approve it.
 
 For a vague request like "check with Claude", ask a short clarification unless
 the user clearly wants setup/readiness. If they want setup/readiness, run

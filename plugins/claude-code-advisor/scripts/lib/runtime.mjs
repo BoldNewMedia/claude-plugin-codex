@@ -137,7 +137,8 @@ export function buildClaudeArgs(options) {
     write = false,
     resumeSessionId = null,
     model = null,
-    effort = null
+    effort = null,
+    allowMcp = false
   } = options;
 
   if (write === "implicit") {
@@ -160,7 +161,10 @@ export function buildClaudeArgs(options) {
   if (effort) {
     args.push("--effort", effort);
   }
-  args.push("--mcp-config", EMPTY_MCP_CONFIG, "--strict-mcp-config", "--no-chrome");
+  if (!allowMcp) {
+    args.push("--mcp-config", EMPTY_MCP_CONFIG, "--strict-mcp-config");
+  }
+  args.push("--no-chrome");
 
   if (write) {
     args.push("--permission-mode", "default");
@@ -173,7 +177,7 @@ export function buildClaudeArgs(options) {
   return args;
 }
 
-export function buildBackgroundArgs({ prompt, name, write = false, model = null, effort = null }) {
+export function buildBackgroundArgs({ prompt, name, write = false, model = null, effort = null, allowMcp = false }) {
   if (!prompt || !String(prompt).trim()) {
     throw new Error("A prompt is required.");
   }
@@ -187,7 +191,10 @@ export function buildBackgroundArgs({ prompt, name, write = false, model = null,
   if (effort) {
     args.push("--effort", effort);
   }
-  args.push("--mcp-config", EMPTY_MCP_CONFIG, "--strict-mcp-config", "--no-chrome");
+  if (!allowMcp) {
+    args.push("--mcp-config", EMPTY_MCP_CONFIG, "--strict-mcp-config");
+  }
+  args.push("--no-chrome");
   if (!write) {
     args.push("--tools", "Read,WebFetch,WebSearch", "--permission-mode", "plan");
   }

@@ -107,6 +107,18 @@ test("buildBackgroundArgs disables inherited MCP config for unattended advisor j
   assert.ok(args.includes("--no-chrome"));
 });
 
+test("buildBackgroundArgs allows project MCP only when explicit", () => {
+  const args = buildBackgroundArgs({
+    prompt: "check this",
+    name: "codex-advice",
+    allowMcp: true
+  });
+
+  assert.equal(args.includes("--mcp-config"), false);
+  assert.equal(args.includes("--strict-mcp-config"), false);
+  assert.ok(args.includes("--no-chrome"));
+});
+
 test("parseBackgroundLaunch extracts Claude background id", () => {
   const output = [
     "Starting background service...",

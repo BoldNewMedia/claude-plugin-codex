@@ -44,9 +44,18 @@ function parseArgs(argv) {
     }
     const key = arg.slice(2);
     if (
-      ["json", "background", "write", "resume", "fresh", "watch", "follow", "forever", "no-background-fallback"].includes(
-        key
-      )
+      [
+        "json",
+        "background",
+        "write",
+        "resume",
+        "fresh",
+        "watch",
+        "follow",
+        "forever",
+        "no-background-fallback",
+        "allow-mcp"
+      ].includes(key)
     ) {
       options[key] = true;
       continue;
@@ -251,6 +260,56 @@ function currentContext(options = {}) {
   };
 }
 
+function isWithinDirectory(child, parent) {
+  const relative = path.relative(parent, child);
+  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
+}
+
+function findProjectMcpConfig(ctx) {
+  const checked = new Set();
+  const candidates = [];
+  let current = ctx.cwd;
+  while (isWithinDirectory(current, ctx.workspaceRoot)) {
+    candidates.push(current);
+    if (current === ctx.workspaceRoot) {
+      break;
+    }
+    const parent = path.dirname(current);
+    if (parent === current) {
+      break;
+    }
+    current = parent;
+  }
+  candidates.push(ctx.workspaceRoot);
+
+  for (const candidate of candidates) {
+    const configPath = path.join(candidate, ".mcp.json");
+    if (!checked.has(configPath) && fs.existsSync(configPath)) {
+      return configPath;
+    }
+    checked.add(configPath);
+  }
+  return null;
+}
+
+function assertBackgroundMcpSafe(ctx, options = {}) {
+  if (options["allow-mcp"]) {
+    return;
+  }
+  const configPath = findProjectMcpConfig(ctx);
+  if (!configPath) {
+    return;
+  }
+  throw new Error(
+    [
+      `Refusing Claude background mode because ${configPath} exists.`,
+      "Claude Code background mode can still open an MCP permission picker before noninteractive flags take effect.",
+      "MCP is disabled unless the user explicitly asks for it.",
+      "Run foreground, or pass --allow-mcp only after explicit user approval."
+    ].join(" ")
+  );
+}
+
 function persistContext(ctx, state) {
   const saved = saveState(ctx.stateDir, state);
   fs.mkdirSync(ctx.indexDir, { recursive: true });
@@ -341,7 +400,8 @@ function runForeground(ctx, kind, prompt, options = {}) {
     write: Boolean(options.write),
     resumeSessionId: resume?.claudeSessionId ?? null,
     model: options.model || null,
-    effort: options.effort || DEFAULT_CLAUDE_EFFORT
+    effort: options.effort || DEFAULT_CLAUDE_EFFORT,
+    allowMcp: Boolean(options["allow-mcp"])
   });
   let result;
   try {
@@ -385,13 +445,15 @@ function runBackground(ctx, kind, prompt, options = {}) {
   if (ctx.state.capabilities && !ctx.state.capabilities.background) {
     throw new Error("Claude background mode is unavailable. Run foreground or rerun setup after upgrading Claude Code.");
   }
+  assertBackgroundMcpSafe(ctx, options);
   const job = createJob(ctx, kind, { write: options.write, summary: prompt.slice(0, 100) });
   const args = buildBackgroundArgs({
     prompt,
     name: `codex-${job.id}`,
     write: Boolean(options.write),
     model: options.model || null,
-    effort: options.effort || DEFAULT_CLAUDE_EFFORT
+    effort: options.effort || DEFAULT_CLAUDE_EFFORT,
+    allowMcp: Boolean(options["allow-mcp"])
   });
   const result = runClaude(args, { cwd: ctx.cwd, timeoutMs: Number(options.timeoutMs || 30000) });
   if (result.status !== 0) {
@@ -728,9 +790,9 @@ function printUsage() {
     [
       "Usage:",
       "  claude-companion setup [--json]",
-      "  claude-companion advise [--background] [--write] [--effort <level>] [--no-background-fallback] [prompt]",
-      "  claude-companion do [--background] [--write] [--model <model>] [--effort <level>] [prompt]",
-      "  claude-companion rescue [--background] [--write] [--resume] [--effort <level>] [--no-background-fallback] [prompt]",
+      "  claude-companion advise [--background] [--write] [--effort <level>] [--allow-mcp] [--no-background-fallback] [prompt]",
+      "  claude-companion do [--background] [--write] [--model <model>] [--effort <level>] [--allow-mcp] [prompt]",
+      "  claude-companion rescue [--background] [--write] [--resume] [--effort <level>] [--allow-mcp] [--no-background-fallback] [prompt]",
       "  claude-companion review [--base <ref>] [--effort <level>] [--json]",
       "  claude-companion adversarial-review [--base <ref>] [--effort <level>] [focus] [--json]",
       "  claude-companion monitor [job-id] [--interval-ms <ms>] [--max-checks <n>] [--stale-after-ms <ms>] [--json]",
