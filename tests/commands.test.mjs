@@ -118,6 +118,31 @@ console.error("unsupported"); process.exit(2);
   assert.equal(stored.job.lastMeaningfulOutput, "latest output");
 });
 
+test("review defaults to a single Claude turn", () => {
+  const fake = makeFakeClaude(`
+const args = process.argv.slice(2);
+if (args.includes("-p")) {
+  const index = args.indexOf("--max-turns");
+  if (args[index + 1] !== "1") {
+    console.error("expected --max-turns 1, got " + args[index + 1]);
+    process.exit(2);
+  }
+  console.log(JSON.stringify({findings:[]}));
+  process.exit(0);
+}
+console.error("unsupported"); process.exit(2);
+`);
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "claude-state-"));
+  const stdout = execFileSync(process.execPath, [companion.pathname, "review", "--json"], {
+    env: { ...process.env, PATH: `${fake.dir}:${process.env.PATH}`, CLAUDE_COMPANION_STATE_ROOT: stateRoot },
+    cwd: stateRoot,
+    encoding: "utf8"
+  });
+  const payload = JSON.parse(stdout);
+
+  assert.equal(payload.status, "completed");
+});
+
 test("monitor polls Claude logs and active agent state", () => {
   const fake = makeFakeClaude(`
 const args = process.argv.slice(2);
@@ -367,6 +392,31 @@ console.error("unsupported"); process.exit(2);
   assert.match(result.stderr, /--allow-mcp/);
 });
 
+test("background advise refuses MCP config above a nested worktree", () => {
+  const fake = makeFakeClaude(`
+const args = process.argv.slice(2);
+if (args[0] === "--bg") {
+  console.error("background should not launch");
+  process.exit(2);
+}
+console.error("unsupported"); process.exit(2);
+`);
+  const parent = fs.mkdtempSync(path.join(os.tmpdir(), "claude-parent-mcp-"));
+  const child = path.join(parent, ".worktrees", "task");
+  fs.mkdirSync(child, { recursive: true });
+  fs.writeFileSync(path.join(parent, ".mcp.json"), '{"mcpServers":{"playwright":{}}}\n', "utf8");
+  fs.writeFileSync(path.join(child, ".git"), "gitdir: ../.git/worktrees/task\n", "utf8");
+  const result = spawnSync(process.execPath, [companion.pathname, "advise", "--background", "check architecture", "--json"], {
+    env: { ...process.env, PATH: `${fake.dir}:${process.env.PATH}`, CLAUDE_COMPANION_STATE_ROOT: parent },
+    cwd: child,
+    encoding: "utf8"
+  });
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, new RegExp(`${parent.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/\\.mcp\\.json`));
+  assert.match(result.stderr, /--allow-mcp/);
+});
+
 test("background advise allows project MCP only with explicit opt-in", () => {
   const fake = makeFakeClaude(`
 const args = process.argv.slice(2);
@@ -395,6 +445,32 @@ console.error("unsupported"); process.exit(2);
 
   assert.equal(payload.status, "running");
   assert.equal(payload.claudeSessionId, "bg123");
+});
+
+test("read-only do defaults to local read-only tools without WebFetch", () => {
+  const fake = makeFakeClaude(`
+const args = process.argv.slice(2);
+if (args.includes("-p")) {
+  const tools = args[args.indexOf("--tools") + 1];
+  if (tools !== "Read,Glob,Grep") {
+    console.error("expected local read-only tools, got " + tools);
+    process.exit(2);
+  }
+  console.log("done");
+  process.exit(0);
+}
+console.error("unsupported"); process.exit(2);
+`);
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "claude-state-"));
+  const stdout = execFileSync(process.execPath, [companion.pathname, "do", "inspect local code", "--json"], {
+    env: { ...process.env, PATH: `${fake.dir}:${process.env.PATH}`, CLAUDE_COMPANION_STATE_ROOT: stateRoot },
+    cwd: stateRoot,
+    encoding: "utf8"
+  });
+  const payload = JSON.parse(stdout);
+
+  assert.equal(payload.status, "completed");
+  assert.equal(payload.output, "done");
 });
 
 test("foreground advise falls back to background on timeout", () => {

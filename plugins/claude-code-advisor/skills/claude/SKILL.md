@@ -68,8 +68,13 @@ commands. The guaranteed Codex surface is the `$claude` skill mention.
   without them Claude Code can stop at the MCP permission picker instead of
   producing an answer.
 - Do not use project MCP servers unless the user explicitly asks for MCP.
-  Background mode must refuse workspaces with `.mcp.json` unless `--allow-mcp`
-  is explicit. Use `--allow-mcp` only after that explicit user approval.
+  Background mode must refuse the current directory and ancestor directories
+  with `.mcp.json` unless `--allow-mcp` is explicit. Use `--allow-mcp` only
+  after that explicit user approval.
+- Keep read-only prepared local tasks (`do` and `rescue`) on local tools by
+  default: `Read,Glob,Grep`. `advise` may use web tools. For `do` and `rescue`,
+  enable `WebFetch` or `WebSearch` only when the task needs web access and
+  `--allow-web` is explicit.
 - Do not pass `--model sonnet` for advice, review, adversarial-review, rescue,
   or monitor work unless the user explicitly asks for Sonnet. Let Claude Code
   use the user's configured default model.
@@ -126,6 +131,10 @@ If the companion refuses background mode because the workspace contains
 `.mcp.json`, do not retry background blindly. Use foreground mode, or ask the
 user whether Claude should use MCP and rerun with `--allow-mcp` only if they
 explicitly approve it.
+
+If a prepared `do` or `rescue` task needs external docs or URLs, ask whether
+web access is acceptable and rerun with `--allow-web`. Otherwise keep local
+review and prepared tasks on `Read,Glob,Grep`.
 
 For a vague request like "check with Claude", ask a short clarification unless
 the user clearly wants setup/readiness. If they want setup/readiness, run

@@ -26,7 +26,7 @@ import {
 
 const DEFAULT_TIMEOUT_MS = 120000;
 const DEFAULT_TASK_MAX_TURNS = 8;
-const DEFAULT_REVIEW_MAX_TURNS = 3;
+const DEFAULT_REVIEW_MAX_TURNS = 1;
 const DEFAULT_MONITOR_INTERVAL_MS = 30000;
 const DEFAULT_MONITOR_CHECKS = 20;
 const DEFAULT_STALE_AFTER_MS = 120000;
@@ -54,7 +54,8 @@ function parseArgs(argv) {
         "follow",
         "forever",
         "no-background-fallback",
-        "allow-mcp"
+        "allow-mcp",
+        "allow-web"
       ].includes(key)
     ) {
       options[key] = true;
@@ -260,34 +261,20 @@ function currentContext(options = {}) {
   };
 }
 
-function isWithinDirectory(child, parent) {
-  const relative = path.relative(parent, child);
-  return relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative));
-}
-
 function findProjectMcpConfig(ctx) {
   const checked = new Set();
-  const candidates = [];
   let current = ctx.cwd;
-  while (isWithinDirectory(current, ctx.workspaceRoot)) {
-    candidates.push(current);
-    if (current === ctx.workspaceRoot) {
-      break;
+  while (true) {
+    const configPath = path.join(current, ".mcp.json");
+    if (!checked.has(configPath) && fs.existsSync(configPath)) {
+      return configPath;
     }
+    checked.add(configPath);
     const parent = path.dirname(current);
     if (parent === current) {
       break;
     }
     current = parent;
-  }
-  candidates.push(ctx.workspaceRoot);
-
-  for (const candidate of candidates) {
-    const configPath = path.join(candidate, ".mcp.json");
-    if (!checked.has(configPath) && fs.existsSync(configPath)) {
-      return configPath;
-    }
-    checked.add(configPath);
   }
   return null;
 }
@@ -401,7 +388,8 @@ function runForeground(ctx, kind, prompt, options = {}) {
     resumeSessionId: resume?.claudeSessionId ?? null,
     model: options.model || null,
     effort: options.effort || DEFAULT_CLAUDE_EFFORT,
-    allowMcp: Boolean(options["allow-mcp"])
+    allowMcp: Boolean(options["allow-mcp"]),
+    allowWeb: Boolean(options["allow-web"])
   });
   let result;
   try {
@@ -450,10 +438,12 @@ function runBackground(ctx, kind, prompt, options = {}) {
   const args = buildBackgroundArgs({
     prompt,
     name: `codex-${job.id}`,
+    mode: kind,
     write: Boolean(options.write),
     model: options.model || null,
     effort: options.effort || DEFAULT_CLAUDE_EFFORT,
-    allowMcp: Boolean(options["allow-mcp"])
+    allowMcp: Boolean(options["allow-mcp"]),
+    allowWeb: Boolean(options["allow-web"])
   });
   const result = runClaude(args, { cwd: ctx.cwd, timeoutMs: Number(options.timeoutMs || 30000) });
   if (result.status !== 0) {
@@ -790,9 +780,9 @@ function printUsage() {
     [
       "Usage:",
       "  claude-companion setup [--json]",
-      "  claude-companion advise [--background] [--write] [--effort <level>] [--allow-mcp] [--no-background-fallback] [prompt]",
-      "  claude-companion do [--background] [--write] [--model <model>] [--effort <level>] [--allow-mcp] [prompt]",
-      "  claude-companion rescue [--background] [--write] [--resume] [--effort <level>] [--allow-mcp] [--no-background-fallback] [prompt]",
+      "  claude-companion advise [--background] [--write] [--effort <level>] [--allow-mcp] [--allow-web] [--no-background-fallback] [prompt]",
+      "  claude-companion do [--background] [--write] [--model <model>] [--effort <level>] [--allow-mcp] [--allow-web] [prompt]",
+      "  claude-companion rescue [--background] [--write] [--resume] [--effort <level>] [--allow-mcp] [--allow-web] [--no-background-fallback] [prompt]",
       "  claude-companion review [--base <ref>] [--effort <level>] [--json]",
       "  claude-companion adversarial-review [--base <ref>] [--effort <level>] [focus] [--json]",
       "  claude-companion monitor [job-id] [--interval-ms <ms>] [--max-checks <n>] [--stale-after-ms <ms>] [--json]",

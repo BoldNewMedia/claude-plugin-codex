@@ -79,6 +79,50 @@ test("buildClaudeArgs passes explicit effort", () => {
   assert.deepEqual(args.slice(args.indexOf("--effort"), args.indexOf("--effort") + 2), ["--effort", "xhigh"]);
 });
 
+test("buildClaudeArgs keeps local read-only tasks off web tools by default", () => {
+  const args = buildClaudeArgs({
+    mode: "do",
+    prompt: "inspect local code"
+  });
+
+  assert.deepEqual(args.slice(args.indexOf("--tools"), args.indexOf("--tools") + 2), ["--tools", "Read,Glob,Grep"]);
+});
+
+test("buildClaudeArgs keeps advise web-capable by default", () => {
+  const args = buildClaudeArgs({
+    mode: "advise",
+    prompt: "inspect local code and relevant docs"
+  });
+
+  assert.deepEqual(args.slice(args.indexOf("--tools"), args.indexOf("--tools") + 2), [
+    "--tools",
+    "Read,Glob,Grep,WebFetch,WebSearch"
+  ]);
+});
+
+test("buildClaudeArgs enables web tools for local tasks only when explicit", () => {
+  const args = buildClaudeArgs({
+    mode: "do",
+    prompt: "inspect local code and relevant docs",
+    allowWeb: true
+  });
+
+  assert.deepEqual(args.slice(args.indexOf("--tools"), args.indexOf("--tools") + 2), [
+    "--tools",
+    "Read,Glob,Grep,WebFetch,WebSearch"
+  ]);
+});
+
+test("buildBackgroundArgs keeps background do off web tools by default", () => {
+  const args = buildBackgroundArgs({
+    mode: "do",
+    prompt: "inspect local code",
+    name: "codex-do"
+  });
+
+  assert.deepEqual(args.slice(args.indexOf("--tools"), args.indexOf("--tools") + 2), ["--tools", "Read,Glob,Grep"]);
+});
+
 test("buildClaudeArgs disables inherited MCP config for unattended advisor jobs", () => {
   const args = buildClaudeArgs({
     mode: "advise",

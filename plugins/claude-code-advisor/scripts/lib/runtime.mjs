@@ -6,6 +6,15 @@ import path from "node:path";
 export const STATE_VERSION = 1;
 export const REVIEW_SEVERITIES = new Set(["BLOCKER", "MAJOR", "MINOR"]);
 export const EMPTY_MCP_CONFIG = '{"mcpServers":{}}';
+export const LOCAL_READ_TOOLS = "Read,Glob,Grep";
+export const WEB_READ_TOOLS = `${LOCAL_READ_TOOLS},WebFetch,WebSearch`;
+
+function readToolsForMode(mode, allowWeb = false) {
+  if (allowWeb || mode === "advise") {
+    return WEB_READ_TOOLS;
+  }
+  return LOCAL_READ_TOOLS;
+}
 
 export function nowIso() {
   return new Date().toISOString();
@@ -138,7 +147,8 @@ export function buildClaudeArgs(options) {
     resumeSessionId = null,
     model = null,
     effort = null,
-    allowMcp = false
+    allowMcp = false,
+    allowWeb = false
   } = options;
 
   if (write === "implicit") {
@@ -171,13 +181,22 @@ export function buildClaudeArgs(options) {
   } else if (mode === "review" || mode === "adversarial-review") {
     args.push("--tools", "", "--permission-mode", "plan");
   } else {
-    args.push("--tools", "Read,WebFetch,WebSearch", "--permission-mode", "plan");
+    args.push("--tools", readToolsForMode(mode, allowWeb), "--permission-mode", "plan");
   }
 
   return args;
 }
 
-export function buildBackgroundArgs({ prompt, name, write = false, model = null, effort = null, allowMcp = false }) {
+export function buildBackgroundArgs({
+  prompt,
+  name,
+  mode = "advise",
+  write = false,
+  model = null,
+  effort = null,
+  allowMcp = false,
+  allowWeb = false
+}) {
   if (!prompt || !String(prompt).trim()) {
     throw new Error("A prompt is required.");
   }
@@ -196,7 +215,7 @@ export function buildBackgroundArgs({ prompt, name, write = false, model = null,
   }
   args.push("--no-chrome");
   if (!write) {
-    args.push("--tools", "Read,WebFetch,WebSearch", "--permission-mode", "plan");
+    args.push("--tools", readToolsForMode(mode, allowWeb), "--permission-mode", "plan");
   }
   args.push(prompt);
   return args;

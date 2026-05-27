@@ -153,10 +153,11 @@ $claude rescue --background investigate the flaky integration test
 $claude monitor <job-id>
 ```
 
-MCP is off by default. If the workspace has a `.mcp.json`, the companion
-refuses background mode because Claude Code can still open an interactive MCP
-permission picker before returning an answer. Use foreground mode, or pass
-`--allow-mcp` only after the user explicitly asks Claude to use MCP.
+MCP is off by default. If the workspace or an ancestor directory has
+`.mcp.json`, the companion refuses background mode because Claude Code can
+still open an interactive MCP permission picker before returning an answer.
+Use foreground mode, or pass `--allow-mcp` only after the user explicitly asks
+Claude to use MCP.
 
 The monitor checks Claude every 30 seconds by default. It keeps raw logs in
 JSON output, but the human view shows the useful signal: whether Claude is
@@ -200,9 +201,14 @@ The companion enforces this with strict non-interactive flags:
 --mcp-config '{"mcpServers":{}}' --strict-mcp-config --no-chrome
 ```
 
-Background mode has an extra guard: if the current workspace contains
-`.mcp.json`, background launch is blocked unless you pass `--allow-mcp`.
-Do that only after the user explicitly asks Claude to use MCP.
+Background mode has an extra guard: if the current directory or any ancestor
+contains `.mcp.json`, background launch is blocked unless you pass
+`--allow-mcp`. Do that only after the user explicitly asks Claude to use MCP.
+
+Read-only prepared local tasks (`do` and `rescue`) use `Read,Glob,Grep` by
+default. Web tools stay available for `advise`. For local prepared tasks, pass
+`--allow-web` only when the task needs external URLs or docs; this keeps local
+code reviews from stopping at a `WebFetch` permission prompt.
 
 The plugin does not force Sonnet for advisor, review, adversarial-review, or
 rescue work. It lets Claude Code use your configured default model unless you
@@ -286,8 +292,13 @@ through the installed skill. Sonnet is used only for this small routing test.
 - Background mode is optional. If the companion cannot verify `claude --bg`,
   `claude agents`, `claude logs`, `claude attach`, and `claude stop`, it
   degrades to foreground-only behavior.
-- Background mode refuses workspaces with `.mcp.json` unless `--allow-mcp` is
-  explicit. This avoids Claude Code's interactive MCP picker inside Codex.
+- Background mode refuses the current directory and ancestor directories with
+  `.mcp.json` unless `--allow-mcp` is explicit. This avoids Claude Code's
+  interactive MCP picker inside Codex, including nested worktrees under a repo
+  that has MCP config.
+- Read-only prepared local tasks disable web tools by default. `advise` remains
+  web-capable. Use `--allow-web` for `do` or `rescue` only when the task needs
+  web access.
 - `$claude monitor` checks a background job every 30 seconds by default. It
   reads `claude logs` and `claude agents`, filters routine terminal noise, and
   marks repeated output as stale after two minutes.
