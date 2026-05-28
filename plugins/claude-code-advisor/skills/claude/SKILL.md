@@ -21,9 +21,9 @@ Canonical forms:
 
 ```text
 $claude setup
-$claude advise <question>
-$claude do [--background] [--write] [--model sonnet|opus] <prepared task>
-$claude rescue [--background] [--write] [--resume] <task>
+$claude advise [--max-turns <n>] <question>
+$claude do [--background] [--write] [--model sonnet|opus] [--max-turns <n>] <prepared task>
+$claude rescue [--background] [--write] [--resume] [--model sonnet|opus] [--max-turns <n>] <task>
 $claude review [--base <ref>]
 $claude adversarial-review [--base <ref>] [focus]
 $claude monitor [job-id]
@@ -89,6 +89,10 @@ commands. The guaranteed Codex surface is the `$claude` skill mention.
 - Use `$claude do --model opus` for complex/high-judgment Claude tasks when the
   user asks for or agrees to a stronger Claude worker. Treat Opus as the
   Claude-side choice for tasks you would not hand to a junior agent.
+- Foreground `advise`, `do`, and `rescue` use a larger default max-turn budget
+  for prepared work. `review` and `adversarial-review` stay tight and
+  structured with one default turn. If a foreground prepared task hits the
+  max-turn limit, rerun with `--max-turns <higher>` or narrow the task.
 - Do not auto-resume a Claude job when the companion says explicit selection
   is required.
 
@@ -110,7 +114,7 @@ commands. The guaranteed Codex surface is the `$claude` skill mention.
   and active agent state. Default to `--interval-ms 30000`. Prefer the human
   summary unless the user asks for raw JSON; it reports active/stale state, the
   last meaningful output line, and the suggested next action.
-- `review`: use for ordinary read-only review of local git state.
+- `review`: use for short structured read-only review of local git state.
 - `adversarial-review`: use for challenge reviews, plan attacks, and harness
   checker passes.
 - `status`, `result`, `cancel`: use for managed Claude jobs only.
@@ -123,7 +127,7 @@ For long-running work, prefer:
 node "<plugin root>/scripts/claude-companion.mjs" advise --background "<question>"
 node "<plugin root>/scripts/claude-companion.mjs" do --background --model sonnet "<prepared task>"
 node "<plugin root>/scripts/claude-companion.mjs" do --background --model opus "<prepared task>"
-node "<plugin root>/scripts/claude-companion.mjs" rescue --background "<task>"
+node "<plugin root>/scripts/claude-companion.mjs" rescue --background --model opus "<task>"
 node "<plugin root>/scripts/claude-companion.mjs" monitor <job-id> --interval-ms 30000
 ```
 
@@ -216,6 +220,9 @@ Use Opus for:
 Still prepare a specific task before launching Opus. Include the goal, relevant
 absolute paths, constraints, allowed write scope, verification command, and stop
 conditions. Use `--write` only after the user agrees to write-capable Claude.
+Foreground `do --model opus` and `rescue --model opus` use the larger prepared
+task max-turn default. Add `--max-turns <n>` only when the task needs a
+different budget.
 
 ```bash
 node "<plugin root>/scripts/claude-companion.mjs" do --background --model opus --effort xhigh "<prepared task>"

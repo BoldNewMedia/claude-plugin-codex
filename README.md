@@ -48,7 +48,8 @@ The stable command form is `$claude`. If your Codex UI exposes the skill as
 
 - `$claude setup` checks whether Claude Code is installed, authenticated, and
   supports the needed CLI features.
-- `$claude review` runs a structured read-only review of local git state.
+- `$claude review` runs the short structured read-only review route for local
+  git state.
 - `$claude adversarial-review` asks Claude to challenge a plan or diff.
 - `$claude advise` asks Claude for a quick second opinion.
 - `$claude do` gives Claude a prepared coding, exploration, verifier, scout, or
@@ -64,7 +65,7 @@ Longer jobs can run in the background:
 ```text
 $claude advise --background should this VAD tuning loop collect N=5 now?
 $claude do --background --model sonnet map the auth module and return file:line citations
-$claude rescue --background investigate the flaky integration test
+$claude rescue --background --model opus investigate the flaky integration test
 $claude monitor <job-id>
 $claude result <job-id>
 ```
@@ -131,7 +132,7 @@ $claude setup
 $claude advise --background should this plan use a background worker?
 $claude do --background --model sonnet map this package and cite file:line call sites
 $claude do --background --model opus debug this cross-module failure with a prepared task
-$claude rescue --background investigate the flaky integration test
+$claude rescue --background --model opus investigate the flaky integration test
 $claude monitor <job-id>
 $claude rescue --write fix the failing test with the smallest safe patch
 $claude review --base main
@@ -149,7 +150,7 @@ same skill.
 Use background mode when Claude may need more than one short answer:
 
 ```text
-$claude rescue --background investigate the flaky integration test
+$claude rescue --background --model opus investigate the flaky integration test
 $claude monitor <job-id>
 ```
 
@@ -190,6 +191,12 @@ debugging, broad refactors, architecture changes, auth, money, migrations, PII,
 provider reliability, AI runtime paths, or work that needs the same level of
 judgment you would reserve for GPT-5.5. Still prepare a specific task with
 paths, constraints, allowed write scope, verification, and stop conditions.
+
+Foreground `$claude advise`, `$claude do --model opus`, and
+`$claude rescue --model opus` use a larger default turn budget for prepared
+work. Pass `--max-turns <n>` to override it. `$claude review` and
+`$claude adversarial-review` stay tight and structured with a single default
+turn.
 
 Managed Claude jobs ignore inherited MCP server config by default. This keeps
 advisor and rescue runs from blocking on an interactive "enable MCP servers?"
@@ -299,6 +306,9 @@ through the installed skill. Sonnet is used only for this small routing test.
 - Read-only prepared local tasks disable web tools by default. `advise` remains
   web-capable. Use `--allow-web` for `do` or `rescue` only when the task needs
   web access.
+- Foreground prepared task routes use a larger default turn budget than
+  structured review. If Claude reports that it hit the max-turn limit, rerun
+  with `--max-turns <higher>` or narrow the task.
 - `$claude monitor` checks a background job every 30 seconds by default. It
   reads `claude logs` and `claude agents`, filters routine terminal noise, and
   marks repeated output as stale after two minutes.

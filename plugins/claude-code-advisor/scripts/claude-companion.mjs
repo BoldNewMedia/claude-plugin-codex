@@ -25,7 +25,7 @@ import {
 } from "./lib/runtime.mjs";
 
 const DEFAULT_TIMEOUT_MS = 120000;
-const DEFAULT_TASK_MAX_TURNS = 8;
+const DEFAULT_TASK_MAX_TURNS = 20;
 const DEFAULT_REVIEW_MAX_TURNS = 1;
 const DEFAULT_MONITOR_INTERVAL_MS = 30000;
 const DEFAULT_MONITOR_CHECKS = 20;
@@ -223,6 +223,24 @@ function runClaude(args, options = {}) {
 
 function isTimeoutError(error) {
   return /timed out after \d+ms/i.test(String(error?.message || error || ""));
+}
+
+function isMaxTurnLimitOutput(value) {
+  const text = String(value || "");
+  return /\b(?:hit|reached)\s+(?:the\s+)?max[- ]turns?\b/i.test(text) || /\bmax[- ]turn limit\b/i.test(text);
+}
+
+function resultWithMaxTurnHint(result) {
+  const combined = `${result.stdout || ""}\n${result.stderr || ""}`;
+  if (!isMaxTurnLimitOutput(combined)) {
+    return result.stdout.trim();
+  }
+  return [
+    (result.stdout || result.stderr || "").trim(),
+    "Claude hit the max-turn limit. Rerun with `--max-turns <higher>` or narrow the task."
+  ]
+    .filter(Boolean)
+    .join("\n");
 }
 
 function commandAvailable(commandArgs) {
@@ -425,7 +443,7 @@ function runForeground(ctx, kind, prompt, options = {}) {
     stdout: result.stdout,
     stderr: result.stderr,
     claudeSessionId: resume?.claudeSessionId ?? null,
-    result: result.stdout.trim()
+    result: result.status === 0 ? result.stdout.trim() : resultWithMaxTurnHint(result)
   });
 }
 
@@ -780,11 +798,11 @@ function printUsage() {
     [
       "Usage:",
       "  claude-companion setup [--json]",
-      "  claude-companion advise [--background] [--write] [--effort <level>] [--allow-mcp] [--allow-web] [--no-background-fallback] [prompt]",
-      "  claude-companion do [--background] [--write] [--model <model>] [--effort <level>] [--allow-mcp] [--allow-web] [prompt]",
-      "  claude-companion rescue [--background] [--write] [--resume] [--effort <level>] [--allow-mcp] [--allow-web] [--no-background-fallback] [prompt]",
-      "  claude-companion review [--base <ref>] [--effort <level>] [--json]",
-      "  claude-companion adversarial-review [--base <ref>] [--effort <level>] [focus] [--json]",
+      "  claude-companion advise [--background] [--write] [--max-turns <n>] [--effort <level>] [--allow-mcp] [--allow-web] [--no-background-fallback] [prompt]",
+      "  claude-companion do [--background] [--write] [--model <model>] [--max-turns <n>] [--effort <level>] [--allow-mcp] [--allow-web] [prompt]",
+      "  claude-companion rescue [--background] [--write] [--resume] [--model <model>] [--max-turns <n>] [--effort <level>] [--allow-mcp] [--allow-web] [--no-background-fallback] [prompt]",
+      "  claude-companion review [--base <ref>] [--max-turns <n>] [--effort <level>] [--json]",
+      "  claude-companion adversarial-review [--base <ref>] [--max-turns <n>] [--effort <level>] [focus] [--json]",
       "  claude-companion monitor [job-id] [--interval-ms <ms>] [--max-checks <n>] [--stale-after-ms <ms>] [--json]",
       "  claude-companion status [job-id] [--watch] [--json]",
       "  claude-companion result [job-id] [--json]",

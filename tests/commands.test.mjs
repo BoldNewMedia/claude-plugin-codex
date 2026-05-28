@@ -15,6 +15,22 @@ function makeFakeClaude(scriptBody) {
   return { dir, bin };
 }
 
+function makeFakeClaudeExpectingMaxTurns(expected) {
+  return makeFakeClaude(`
+const args = process.argv.slice(2);
+if (args.includes("-p")) {
+  const index = args.indexOf("--max-turns");
+  if (args[index + 1] !== ${JSON.stringify(String(expected))}) {
+    console.error("expected --max-turns ${expected}, got " + args[index + 1]);
+    process.exit(2);
+  }
+  console.log("ok");
+  process.exit(0);
+}
+console.error("unsupported"); process.exit(2);
+`);
+}
+
 test("setup writes a capabilities manifest and degrades background when lifecycle is unavailable", () => {
   const fake = makeFakeClaude(`
 const args = process.argv.slice(2);
@@ -293,19 +309,7 @@ console.error("unsupported"); process.exit(2);
 });
 
 test("foreground advise defaults to a larger turn budget", () => {
-  const fake = makeFakeClaude(`
-const args = process.argv.slice(2);
-if (args.includes("-p")) {
-  const index = args.indexOf("--max-turns");
-  if (args[index + 1] !== "8") {
-    console.error("expected --max-turns 8, got " + args[index + 1]);
-    process.exit(2);
-  }
-  console.log("ok");
-  process.exit(0);
-}
-console.error("unsupported"); process.exit(2);
-`);
+  const fake = makeFakeClaudeExpectingMaxTurns(20);
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "claude-state-"));
   const stdout = execFileSync(process.execPath, [companion.pathname, "advise", "check architecture", "--json"], {
     env: { ...process.env, PATH: `${fake.dir}:${process.env.PATH}`, CLAUDE_COMPANION_STATE_ROOT: stateRoot },
@@ -316,6 +320,74 @@ console.error("unsupported"); process.exit(2);
 
   assert.equal(payload.status, "completed");
   assert.equal(payload.output, "ok");
+});
+
+test("foreground do defaults to a larger turn budget", () => {
+  const fake = makeFakeClaudeExpectingMaxTurns(20);
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "claude-state-"));
+  const stdout = execFileSync(process.execPath, [companion.pathname, "do", "inspect local code", "--json"], {
+    env: { ...process.env, PATH: `${fake.dir}:${process.env.PATH}`, CLAUDE_COMPANION_STATE_ROOT: stateRoot },
+    cwd: stateRoot,
+    encoding: "utf8"
+  });
+  const payload = JSON.parse(stdout);
+
+  assert.equal(payload.status, "completed");
+  assert.equal(payload.output, "ok");
+});
+
+test("foreground rescue defaults to a larger turn budget", () => {
+  const fake = makeFakeClaudeExpectingMaxTurns(20);
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "claude-state-"));
+  const stdout = execFileSync(process.execPath, [companion.pathname, "rescue", "diagnose the failure", "--json"], {
+    env: { ...process.env, PATH: `${fake.dir}:${process.env.PATH}`, CLAUDE_COMPANION_STATE_ROOT: stateRoot },
+    cwd: stateRoot,
+    encoding: "utf8"
+  });
+  const payload = JSON.parse(stdout);
+
+  assert.equal(payload.status, "completed");
+  assert.equal(payload.output, "ok");
+});
+
+test("foreground task max-turn override takes precedence over the default", () => {
+  const fake = makeFakeClaudeExpectingMaxTurns(5);
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "claude-state-"));
+  const stdout = execFileSync(
+    process.execPath,
+    [companion.pathname, "do", "--max-turns", "5", "inspect local code", "--json"],
+    {
+      env: { ...process.env, PATH: `${fake.dir}:${process.env.PATH}`, CLAUDE_COMPANION_STATE_ROOT: stateRoot },
+      cwd: stateRoot,
+      encoding: "utf8"
+    }
+  );
+  const payload = JSON.parse(stdout);
+
+  assert.equal(payload.status, "completed");
+  assert.equal(payload.output, "ok");
+});
+
+test("foreground task max-turn failure includes rerun hint", () => {
+  const fake = makeFakeClaude(`
+const args = process.argv.slice(2);
+if (args.includes("-p")) {
+  console.error("Claude hit max turns before producing a result.");
+  process.exit(1);
+}
+console.error("unsupported"); process.exit(2);
+`);
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "claude-state-"));
+  const stdout = execFileSync(process.execPath, [companion.pathname, "do", "inspect local code", "--json"], {
+    env: { ...process.env, PATH: `${fake.dir}:${process.env.PATH}`, CLAUDE_COMPANION_STATE_ROOT: stateRoot },
+    cwd: stateRoot,
+    encoding: "utf8"
+  });
+  const payload = JSON.parse(stdout);
+
+  assert.equal(payload.status, "failed");
+  assert.match(payload.output, /Claude hit the max-turn limit/);
+  assert.match(payload.output, /--max-turns <higher>/);
 });
 
 test("foreground advise defaults to xhigh effort", () => {
