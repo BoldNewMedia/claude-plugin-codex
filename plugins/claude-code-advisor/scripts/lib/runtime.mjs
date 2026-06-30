@@ -283,10 +283,50 @@ function normalizeClaudeResult(raw) {
     return trimmed;
   }
   const toolCalls = trimmed.match(/^<function_calls>[\s\S]*?<\/function_calls>\s*/);
-  if (!toolCalls) {
-    return trimmed;
+  const withoutToolCalls = toolCalls ? trimmed.slice(toolCalls[0].length).trim() : trimmed;
+  if (withoutToolCalls.startsWith("{")) {
+    return withoutToolCalls;
   }
-  return trimmed.slice(toolCalls[0].length).trim();
+  return extractFirstJsonObject(withoutToolCalls) || withoutToolCalls;
+}
+
+function extractFirstJsonObject(value) {
+  const text = String(value || "");
+  const start = text.indexOf("{");
+  if (start === -1) {
+    return null;
+  }
+
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let index = start; index < text.length; index += 1) {
+    const char = text[index];
+    if (escaped) {
+      escaped = false;
+      continue;
+    }
+    if (char === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (char === '"') {
+      inString = !inString;
+      continue;
+    }
+    if (inString) {
+      continue;
+    }
+    if (char === "{") {
+      depth += 1;
+    } else if (char === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        return text.slice(start, index + 1).trim();
+      }
+    }
+  }
+  return null;
 }
 
 export function buildReviewPrompt({ kind, targetLabel, gitContext, focus = "" }) {
