@@ -244,6 +244,26 @@ so `$claude status`, `$claude result`, and `$claude cancel` can work across
 turns. It does not intentionally collect analytics, phone home, or send data to
 the repository owner.
 
+## State Storage
+
+By default the companion stores state under:
+
+```text
+~/.codex/claude-plugin-codex
+```
+
+Set `CLAUDE_COMPANION_STATE_ROOT` to use another local directory:
+
+```bash
+CLAUDE_COMPANION_STATE_ROOT=/path/to/writable/state \
+  node plugins/claude-code-advisor/scripts/claude-companion.mjs setup --json
+```
+
+This is useful in sandboxed Codex environments where the default Codex home
+path is readable but not writable. The state root should be local, private, and
+excluded from version control because it can contain job prompts, Claude output,
+workspace paths, and review results.
+
 ## Terms
 
 This project is provided under the MIT License. You are responsible for how you
@@ -322,6 +342,11 @@ If Codex shows `Unable to load skill contents` after an update, restart Codex
 or start a new thread. Codex may still point at an older cached skill path after
 a plugin version bump. If the error remains, remove and reinstall the
 `claude-plugin-codex` marketplace.
+
+If `$claude setup` or a companion command fails with a write permission error
+under `~/.codex/claude-plugin-codex`, rerun it with `CLAUDE_COMPANION_STATE_ROOT`
+pointing at a writable private directory. Do not point it at the project
+repository unless you also ignore that path in Git.
 
 ## License
 
