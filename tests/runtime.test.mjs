@@ -245,6 +245,30 @@ test("parseClaudeJsonResult tolerates Claude tool-call markup before review JSON
   assert.equal(parsed.content.findings[0].title, "Markup");
 });
 
+test("parseClaudeJsonResult tolerates Claude prose before review JSON", () => {
+  const payload = {
+    findings: [
+      {
+        severity: "MINOR",
+        title: "Prose",
+        fact: "Claude prefixed the JSON with a status sentence",
+        recommendation: "Extract the first complete JSON object from the envelope result"
+      }
+    ]
+  };
+  const raw = JSON.stringify({
+    type: "result",
+    subtype: "success",
+    result: `Now I have enough context to review.\n\n${JSON.stringify(payload)}\n\nDone.`,
+    session_id: "session-789"
+  });
+
+  const parsed = parseClaudeJsonResult(raw);
+  assert.equal(parsed.sessionId, "session-789");
+  assert.deepEqual(validateReviewPayload(parsed.contentRaw), payload);
+  assert.equal(parsed.content.findings[0].title, "Prose");
+});
+
 test("buildReviewPrompt includes git context and JSON-only contract", () => {
   const prompt = buildReviewPrompt({
     kind: "adversarial-review",
