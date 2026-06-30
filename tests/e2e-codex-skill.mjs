@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-const repoRoot = fileURLToPath(new URL("..", import.meta.url));
+const repoRoot = path.dirname(fileURLToPath(import.meta.url));
 const skillMarker = "claude-code-advisor:claude";
 const advisePrompt = [
   "Use $claude advise --model sonnet --max-turns 1 --timeout-ms 120000 to ask Claude Code to reply with exactly PASS.",
