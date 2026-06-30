@@ -267,14 +267,26 @@ export function parseClaudeJsonResult(raw) {
   }
   const envelope = JSON.parse(text);
   const sessionId = envelope.session_id || envelope.sessionId || null;
-  const contentRaw = typeof envelope.result === "string" ? envelope.result : text;
-  const content = typeof envelope.result === "string" ? JSON.parse(envelope.result) : envelope;
+  const contentRaw = typeof envelope.result === "string" ? normalizeClaudeResult(envelope.result) : text;
+  const content = typeof envelope.result === "string" ? JSON.parse(contentRaw) : envelope;
   return {
     envelope,
     content,
     contentRaw,
     sessionId
   };
+}
+
+function normalizeClaudeResult(raw) {
+  const trimmed = String(raw || "").trim();
+  if (trimmed.startsWith("{")) {
+    return trimmed;
+  }
+  const toolCalls = trimmed.match(/^<function_calls>[\s\S]*?<\/function_calls>\s*/);
+  if (!toolCalls) {
+    return trimmed;
+  }
+  return trimmed.slice(toolCalls[0].length).trim();
 }
 
 export function buildReviewPrompt({ kind, targetLabel, gitContext, focus = "" }) {
