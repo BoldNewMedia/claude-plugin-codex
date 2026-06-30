@@ -569,6 +569,34 @@ function findJob(ctx, reference) {
   return ctx.state.jobs.find((job) => job.id === reference || job.claudeSessionId === reference) || null;
 }
 
+function parseAgentsJson(output, claudeSessionId) {
+  const text = String(output || "").trim();
+  if (!text) {
+    return { output: "" };
+  }
+  try {
+    const parsed = JSON.parse(text);
+    const sessions = Array.isArray(parsed) ? parsed : parsed.sessions || parsed.agents || [];
+    const match = sessions.find((session) => {
+      return (
+        session?.id === claudeSessionId ||
+        session?.sessionId === claudeSessionId ||
+        session?.session_id === claudeSessionId
+      );
+    });
+    const lifecycle = `${match?.status || ""} ${match?.state || ""}`.toLowerCase();
+    return {
+      output: text,
+      sessions,
+      match: match || null,
+      active: /\b(active|running|busy|working)\b/.test(lifecycle),
+      completed: /\b(done|completed|complete|stopped|exited|finished)\b/.test(lifecycle)
+    };
+  } catch {
+    return { output: text };
+  }
+}
+
 function readLiveStatus(job, options = {}) {
   if (!job?.claudeSessionId) {
     return {
@@ -581,16 +609,17 @@ function readLiveStatus(job, options = {}) {
   }
   const timeoutMs = Number(options["timeout-ms"] || 10000);
   const logs = runClaude(["logs", job.claudeSessionId], { timeoutMs });
-  const agents = runClaude(["agents"], { timeoutMs });
+  const agents = runClaude(["agents", "--json"], { timeoutMs });
   const agentsOutput = stripTerminalControl(`${agents.stdout || ""}${agents.stderr || ""}`);
   const logsOutput = stripTerminalControl(`${logs.stdout || ""}${logs.stderr || ""}`);
+  const agentStatus = agents.status === 0 ? parseAgentsJson(agentsOutput, job.claudeSessionId) : { output: agentsOutput };
   const meaningfulLogLines = extractMeaningfulLogLines(logsOutput);
-  const completed = isCompletedLogOutput(logsOutput);
+  const completed = isCompletedLogOutput(logsOutput) || Boolean(agentStatus.completed);
   return {
     checkedAt: new Date().toISOString(),
     jobId: job.id,
     claudeSessionId: job.claudeSessionId,
-    active: logs.status === 0 && !completed,
+    active: !completed && (logs.status === 0 || Boolean(agentStatus.active)),
     completed,
     available: logs.status === 0 || agents.status === 0,
     logs: {
@@ -600,7 +629,8 @@ function readLiveStatus(job, options = {}) {
     },
     agents: {
       available: agents.status === 0,
-      output: agentsOutput.trim()
+      output: agentStatus.output || agentsOutput.trim(),
+      match: agentStatus.match || null
     }
   };
 }

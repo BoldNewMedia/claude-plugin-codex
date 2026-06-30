@@ -213,6 +213,38 @@ test("parseClaudeJsonResult unwraps Claude CLI json envelope", () => {
   assert.equal(parsed.content.findings[0].severity, "MINOR");
 });
 
+test("parseClaudeJsonResult tolerates Claude tool-call markup before review JSON", () => {
+  const payload = {
+    findings: [
+      {
+        severity: "MINOR",
+        title: "Markup",
+        fact: "Claude prefixed the JSON with tool-call markup",
+        recommendation: "Strip the tool-call block before review validation"
+      }
+    ]
+  };
+  const raw = JSON.stringify({
+    type: "result",
+    subtype: "success",
+    result: [
+      "<function_calls>",
+      '<invoke name="Bash">',
+      '<parameter name="command">git log main...HEAD --oneline</parameter>',
+      "</invoke>",
+      "</function_calls>",
+      "",
+      JSON.stringify(payload)
+    ].join("\n"),
+    session_id: "session-456"
+  });
+
+  const parsed = parseClaudeJsonResult(raw);
+  assert.equal(parsed.sessionId, "session-456");
+  assert.deepEqual(validateReviewPayload(parsed.contentRaw), payload);
+  assert.equal(parsed.content.findings[0].title, "Markup");
+});
+
 test("buildReviewPrompt includes git context and JSON-only contract", () => {
   const prompt = buildReviewPrompt({
     kind: "adversarial-review",

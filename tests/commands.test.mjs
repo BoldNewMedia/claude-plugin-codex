@@ -200,6 +200,48 @@ console.error("unsupported"); process.exit(2);
   assert.equal(stored.job.lastMonitorSnapshot.summary.lastMeaningfulLine, "progress: still working");
 });
 
+test("monitor uses agents json state to mark a background job completed", () => {
+  const fake = makeFakeClaude(`
+const args = process.argv.slice(2);
+if (args.includes("--version")) { console.log("2.1.132 (Claude Code)"); process.exit(0); }
+if (args[0] === "--bg") { console.log("backgrounded · bg123 (idle - send a prompt to start)"); process.exit(0); }
+if (args[0] === "logs") { console.log("final answer available"); process.exit(0); }
+if (args[0] === "agents" && args[1] === "--json") {
+  console.log(JSON.stringify([{ id: "bg123", status: "idle", state: "done" }]));
+  process.exit(0);
+}
+if (args[0] === "agents") { console.error("agents must be read with --json"); process.exit(2); }
+console.error("unsupported"); process.exit(2);
+`);
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "claude-state-"));
+  const env = { ...process.env, PATH: `${fake.dir}:${process.env.PATH}`, CLAUDE_COMPANION_STATE_ROOT: stateRoot };
+  const launched = execFileSync(process.execPath, [companion.pathname, "advise", "--background", "check architecture", "--json"], {
+    env,
+    cwd: stateRoot,
+    encoding: "utf8"
+  });
+  const job = JSON.parse(launched);
+  const watched = execFileSync(process.execPath, [companion.pathname, "monitor", job.jobId, "--json"], {
+    env,
+    cwd: stateRoot,
+    encoding: "utf8"
+  });
+  const snapshot = JSON.parse(watched.trim());
+
+  assert.equal(snapshot.active, false);
+  assert.equal(snapshot.completed, true);
+  assert.equal(snapshot.agents.match.state, "done");
+
+  const result = execFileSync(process.execPath, [companion.pathname, "result", job.jobId, "--json"], {
+    env,
+    cwd: stateRoot,
+    encoding: "utf8"
+  });
+  const stored = JSON.parse(result);
+  assert.equal(stored.job.status, "completed");
+  assert.equal(stored.result, "final answer available");
+});
+
 test("monitor summarizes meaningful progress and stale repeated logs", () => {
   const fake = makeFakeClaude(`
 const args = process.argv.slice(2);
