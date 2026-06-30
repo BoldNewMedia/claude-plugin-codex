@@ -3,9 +3,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { execFileSync, spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import test from "node:test";
 
-const companion = new URL("../plugins/claude-code-advisor/scripts/claude-companion.mjs", import.meta.url);
+const companion = fileURLToPath(
+  new URL("../plugins/claude-code-advisor/scripts/claude-companion.mjs", import.meta.url)
+);
 
 function makeFakeClaude(scriptBody) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "fake-claude-"));
@@ -44,7 +47,7 @@ if (args.includes("-p")) { console.log("{}"); process.exit(0); }
 console.error("unsupported"); process.exit(2);
 `);
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "claude-state-"));
-  const stdout = execFileSync(process.execPath, [companion.pathname, "setup", "--json"], {
+  const stdout = execFileSync(process.execPath, [companion, "setup", "--json"], {
     env: { ...process.env, PATH: `${fake.dir}:${process.env.PATH}`, CLAUDE_COMPANION_STATE_ROOT: stateRoot },
     cwd: stateRoot,
     encoding: "utf8"
@@ -73,7 +76,7 @@ console.error("unsupported"); process.exit(2);
     CLAUDE_COMPANION_STATE_ROOT: stateRoot,
     CODEX_THREAD_ID: "thread-a"
   };
-  const stdout = execFileSync(process.execPath, [companion.pathname, "review", "--json"], {
+  const stdout = execFileSync(process.execPath, [companion, "review", "--json"], {
     env,
     cwd: stateRoot,
     encoding: "utf8"
@@ -83,7 +86,7 @@ console.error("unsupported"); process.exit(2);
   assert.equal(payload.status, "completed");
   assert.equal(payload.result.findings[0].severity, "MAJOR");
 
-  const result = execFileSync(process.execPath, [companion.pathname, "result", payload.jobId, "--json"], {
+  const result = execFileSync(process.execPath, [companion, "result", payload.jobId, "--json"], {
     env,
     cwd: stateRoot,
     encoding: "utf8"
@@ -105,7 +108,7 @@ console.error("unsupported"); process.exit(2);
 `);
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "claude-state-"));
   const env = { ...process.env, PATH: `${fake.dir}:${process.env.PATH}`, CLAUDE_COMPANION_STATE_ROOT: stateRoot };
-  const stdout = execFileSync(process.execPath, [companion.pathname, "advise", "--background", "check architecture", "--json"], {
+  const stdout = execFileSync(process.execPath, [companion, "advise", "--background", "check architecture", "--json"], {
     env,
     cwd: stateRoot,
     encoding: "utf8"
@@ -115,7 +118,7 @@ console.error("unsupported"); process.exit(2);
   assert.equal(payload.status, "running");
   assert.equal(payload.claudeSessionId, "bg123");
 
-  const cancel = execFileSync(process.execPath, [companion.pathname, "cancel", payload.jobId, "--json"], {
+  const cancel = execFileSync(process.execPath, [companion, "cancel", payload.jobId, "--json"], {
     env,
     cwd: stateRoot,
     encoding: "utf8"
@@ -123,7 +126,7 @@ console.error("unsupported"); process.exit(2);
   assert.equal(JSON.parse(cancel).status, "cancelled");
   assert.equal(fs.readFileSync(stopLog, "utf8"), "bg123");
 
-  const result = execFileSync(process.execPath, [companion.pathname, "result", payload.jobId, "--json"], {
+  const result = execFileSync(process.execPath, [companion, "result", payload.jobId, "--json"], {
     env,
     cwd: stateRoot,
     encoding: "utf8"
@@ -149,7 +152,7 @@ if (args.includes("-p")) {
 console.error("unsupported"); process.exit(2);
 `);
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "claude-state-"));
-  const stdout = execFileSync(process.execPath, [companion.pathname, "review", "--json"], {
+  const stdout = execFileSync(process.execPath, [companion, "review", "--json"], {
     env: { ...process.env, PATH: `${fake.dir}:${process.env.PATH}`, CLAUDE_COMPANION_STATE_ROOT: stateRoot },
     cwd: stateRoot,
     encoding: "utf8"
@@ -170,7 +173,7 @@ console.error("unsupported"); process.exit(2);
 `);
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "claude-state-"));
   const env = { ...process.env, PATH: `${fake.dir}:${process.env.PATH}`, CLAUDE_COMPANION_STATE_ROOT: stateRoot };
-  const launched = execFileSync(process.execPath, [companion.pathname, "advise", "--background", "check architecture", "--json"], {
+  const launched = execFileSync(process.execPath, [companion, "advise", "--background", "check architecture", "--json"], {
     env,
     cwd: stateRoot,
     encoding: "utf8"
@@ -178,7 +181,7 @@ console.error("unsupported"); process.exit(2);
   const job = JSON.parse(launched);
   const watched = execFileSync(
     process.execPath,
-    [companion.pathname, "monitor", job.jobId, "--interval-ms", "1", "--max-checks", "2", "--json"],
+    [companion, "monitor", job.jobId, "--interval-ms", "1", "--max-checks", "2", "--json"],
     { env, cwd: stateRoot, encoding: "utf8" }
   );
   const snapshots = watched.trim().split(/\r?\n/).map((line) => JSON.parse(line));
@@ -187,7 +190,7 @@ console.error("unsupported"); process.exit(2);
   assert.equal(snapshots[0].active, true);
   assert.equal(snapshots[0].logs.output, "progress: still working");
 
-  const result = execFileSync(process.execPath, [companion.pathname, "result", job.jobId, "--json"], {
+  const result = execFileSync(process.execPath, [companion, "result", job.jobId, "--json"], {
     env,
     cwd: stateRoot,
     encoding: "utf8"
@@ -215,7 +218,7 @@ console.error("unsupported"); process.exit(2);
 `);
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "claude-state-"));
   const env = { ...process.env, PATH: `${fake.dir}:${process.env.PATH}`, CLAUDE_COMPANION_STATE_ROOT: stateRoot };
-  const launched = execFileSync(process.execPath, [companion.pathname, "advise", "--background", "check architecture", "--json"], {
+  const launched = execFileSync(process.execPath, [companion, "advise", "--background", "check architecture", "--json"], {
     env,
     cwd: stateRoot,
     encoding: "utf8"
@@ -224,7 +227,7 @@ console.error("unsupported"); process.exit(2);
   const watched = execFileSync(
     process.execPath,
     [
-      companion.pathname,
+      companion,
       "monitor",
       job.jobId,
       "--interval-ms",
@@ -248,7 +251,7 @@ console.error("unsupported"); process.exit(2);
 
   const human = execFileSync(
     process.execPath,
-    [companion.pathname, "monitor", job.jobId, "--interval-ms", "1", "--max-checks", "1"],
+    [companion, "monitor", job.jobId, "--interval-ms", "1", "--max-checks", "1"],
     { env, cwd: stateRoot, encoding: "utf8" }
   );
   assert.match(human, /Last meaningful output: progress: compiling tests/);
@@ -280,13 +283,13 @@ console.error("unsupported"); process.exit(2);
 `);
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "claude-state-"));
   const env = { ...process.env, PATH: `${fake.dir}:${process.env.PATH}`, CLAUDE_COMPANION_STATE_ROOT: stateRoot };
-  const launched = execFileSync(process.execPath, [companion.pathname, "advise", "--background", "check architecture", "--json"], {
+  const launched = execFileSync(process.execPath, [companion, "advise", "--background", "check architecture", "--json"], {
     env,
     cwd: stateRoot,
     encoding: "utf8"
   });
   const job = JSON.parse(launched);
-  const watched = execFileSync(process.execPath, [companion.pathname, "monitor", job.jobId, "--json"], {
+  const watched = execFileSync(process.execPath, [companion, "monitor", job.jobId, "--json"], {
     env,
     cwd: stateRoot,
     encoding: "utf8"
@@ -298,7 +301,7 @@ console.error("unsupported"); process.exit(2);
   assert.equal(snapshot.summary.state, "inactive");
   assert.equal(snapshot.summary.lastMeaningfulLine, "PASS");
 
-  const result = execFileSync(process.execPath, [companion.pathname, "result", job.jobId, "--json"], {
+  const result = execFileSync(process.execPath, [companion, "result", job.jobId, "--json"], {
     env,
     cwd: stateRoot,
     encoding: "utf8"
@@ -311,7 +314,7 @@ console.error("unsupported"); process.exit(2);
 test("foreground advise defaults to a larger turn budget", () => {
   const fake = makeFakeClaudeExpectingMaxTurns(20);
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "claude-state-"));
-  const stdout = execFileSync(process.execPath, [companion.pathname, "advise", "check architecture", "--json"], {
+  const stdout = execFileSync(process.execPath, [companion, "advise", "check architecture", "--json"], {
     env: { ...process.env, PATH: `${fake.dir}:${process.env.PATH}`, CLAUDE_COMPANION_STATE_ROOT: stateRoot },
     cwd: stateRoot,
     encoding: "utf8"
@@ -325,7 +328,7 @@ test("foreground advise defaults to a larger turn budget", () => {
 test("foreground do defaults to a larger turn budget", () => {
   const fake = makeFakeClaudeExpectingMaxTurns(20);
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "claude-state-"));
-  const stdout = execFileSync(process.execPath, [companion.pathname, "do", "inspect local code", "--json"], {
+  const stdout = execFileSync(process.execPath, [companion, "do", "inspect local code", "--json"], {
     env: { ...process.env, PATH: `${fake.dir}:${process.env.PATH}`, CLAUDE_COMPANION_STATE_ROOT: stateRoot },
     cwd: stateRoot,
     encoding: "utf8"
@@ -339,7 +342,7 @@ test("foreground do defaults to a larger turn budget", () => {
 test("foreground rescue defaults to a larger turn budget", () => {
   const fake = makeFakeClaudeExpectingMaxTurns(20);
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "claude-state-"));
-  const stdout = execFileSync(process.execPath, [companion.pathname, "rescue", "diagnose the failure", "--json"], {
+  const stdout = execFileSync(process.execPath, [companion, "rescue", "diagnose the failure", "--json"], {
     env: { ...process.env, PATH: `${fake.dir}:${process.env.PATH}`, CLAUDE_COMPANION_STATE_ROOT: stateRoot },
     cwd: stateRoot,
     encoding: "utf8"
@@ -355,7 +358,7 @@ test("foreground task max-turn override takes precedence over the default", () =
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "claude-state-"));
   const stdout = execFileSync(
     process.execPath,
-    [companion.pathname, "do", "--max-turns", "5", "inspect local code", "--json"],
+    [companion, "do", "--max-turns", "5", "inspect local code", "--json"],
     {
       env: { ...process.env, PATH: `${fake.dir}:${process.env.PATH}`, CLAUDE_COMPANION_STATE_ROOT: stateRoot },
       cwd: stateRoot,
@@ -378,7 +381,7 @@ if (args.includes("-p")) {
 console.error("unsupported"); process.exit(2);
 `);
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "claude-state-"));
-  const stdout = execFileSync(process.execPath, [companion.pathname, "do", "inspect local code", "--json"], {
+  const stdout = execFileSync(process.execPath, [companion, "do", "inspect local code", "--json"], {
     env: { ...process.env, PATH: `${fake.dir}:${process.env.PATH}`, CLAUDE_COMPANION_STATE_ROOT: stateRoot },
     cwd: stateRoot,
     encoding: "utf8"
@@ -405,7 +408,7 @@ if (args.includes("-p")) {
 console.error("unsupported"); process.exit(2);
 `);
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "claude-state-"));
-  const stdout = execFileSync(process.execPath, [companion.pathname, "advise", "check architecture", "--json"], {
+  const stdout = execFileSync(process.execPath, [companion, "advise", "check architecture", "--json"], {
     env: { ...process.env, PATH: `${fake.dir}:${process.env.PATH}`, CLAUDE_COMPANION_STATE_ROOT: stateRoot },
     cwd: stateRoot,
     encoding: "utf8"
@@ -431,7 +434,7 @@ if (args[0] === "--bg") {
 console.error("unsupported"); process.exit(2);
 `);
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "claude-state-"));
-  const stdout = execFileSync(process.execPath, [companion.pathname, "advise", "--background", "check architecture", "--json"], {
+  const stdout = execFileSync(process.execPath, [companion, "advise", "--background", "check architecture", "--json"], {
     env: { ...process.env, PATH: `${fake.dir}:${process.env.PATH}`, CLAUDE_COMPANION_STATE_ROOT: stateRoot },
     cwd: stateRoot,
     encoding: "utf8"
@@ -453,7 +456,7 @@ console.error("unsupported"); process.exit(2);
 `);
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "claude-state-"));
   fs.writeFileSync(path.join(stateRoot, ".mcp.json"), '{"mcpServers":{"playwright":{}}}\n', "utf8");
-  const result = spawnSync(process.execPath, [companion.pathname, "advise", "--background", "check architecture", "--json"], {
+  const result = spawnSync(process.execPath, [companion, "advise", "--background", "check architecture", "--json"], {
     env: { ...process.env, PATH: `${fake.dir}:${process.env.PATH}`, CLAUDE_COMPANION_STATE_ROOT: stateRoot },
     cwd: stateRoot,
     encoding: "utf8"
@@ -478,7 +481,7 @@ console.error("unsupported"); process.exit(2);
   fs.mkdirSync(child, { recursive: true });
   fs.writeFileSync(path.join(parent, ".mcp.json"), '{"mcpServers":{"playwright":{}}}\n', "utf8");
   fs.writeFileSync(path.join(child, ".git"), "gitdir: ../.git/worktrees/task\n", "utf8");
-  const result = spawnSync(process.execPath, [companion.pathname, "advise", "--background", "check architecture", "--json"], {
+  const result = spawnSync(process.execPath, [companion, "advise", "--background", "check architecture", "--json"], {
     env: { ...process.env, PATH: `${fake.dir}:${process.env.PATH}`, CLAUDE_COMPANION_STATE_ROOT: parent },
     cwd: child,
     encoding: "utf8"
@@ -506,7 +509,7 @@ console.error("unsupported"); process.exit(2);
   fs.writeFileSync(path.join(stateRoot, ".mcp.json"), '{"mcpServers":{"playwright":{}}}\n', "utf8");
   const stdout = execFileSync(
     process.execPath,
-    [companion.pathname, "advise", "--background", "--allow-mcp", "check architecture", "--json"],
+    [companion, "advise", "--background", "--allow-mcp", "check architecture", "--json"],
     {
       env: { ...process.env, PATH: `${fake.dir}:${process.env.PATH}`, CLAUDE_COMPANION_STATE_ROOT: stateRoot },
       cwd: stateRoot,
@@ -534,7 +537,7 @@ if (args.includes("-p")) {
 console.error("unsupported"); process.exit(2);
 `);
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "claude-state-"));
-  const stdout = execFileSync(process.execPath, [companion.pathname, "do", "inspect local code", "--json"], {
+  const stdout = execFileSync(process.execPath, [companion, "do", "inspect local code", "--json"], {
     env: { ...process.env, PATH: `${fake.dir}:${process.env.PATH}`, CLAUDE_COMPANION_STATE_ROOT: stateRoot },
     cwd: stateRoot,
     encoding: "utf8"
@@ -561,7 +564,7 @@ console.error("unsupported"); process.exit(2);
   const env = { ...process.env, PATH: `${fake.dir}:${process.env.PATH}`, CLAUDE_COMPANION_STATE_ROOT: stateRoot };
   const stdout = execFileSync(
     process.execPath,
-    [companion.pathname, "advise", "--timeout-ms", "50", "check architecture", "--json"],
+    [companion, "advise", "--timeout-ms", "50", "check architecture", "--json"],
     { env, cwd: stateRoot, encoding: "utf8" }
   );
   const payload = JSON.parse(stdout);
@@ -570,7 +573,7 @@ console.error("unsupported"); process.exit(2);
   assert.equal(payload.claudeSessionId, "bg123");
   assert.match(payload.output, /Foreground Claude timed out/);
 
-  const status = execFileSync(process.execPath, [companion.pathname, "status", payload.jobId, "--json"], {
+  const status = execFileSync(process.execPath, [companion, "status", payload.jobId, "--json"], {
     env,
     cwd: stateRoot,
     encoding: "utf8"
@@ -589,7 +592,7 @@ console.error("unsupported"); process.exit(2);
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "claude-state-"));
   const result = spawnSync(
     process.execPath,
-    [companion.pathname, "advise", "--timeout-ms", "50", "--no-background-fallback", "slow"],
+    [companion, "advise", "--timeout-ms", "50", "--no-background-fallback", "slow"],
     {
       env: { ...process.env, PATH: `${fake.dir}:${process.env.PATH}`, CLAUDE_COMPANION_STATE_ROOT: stateRoot },
       cwd: stateRoot,
@@ -608,7 +611,7 @@ if (args.includes("-p")) { console.log("human answer"); process.exit(0); }
 console.error("unsupported"); process.exit(2);
 `);
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "claude-state-"));
-  const stdout = execFileSync(process.execPath, [companion.pathname, "advise", "check architecture"], {
+  const stdout = execFileSync(process.execPath, [companion, "advise", "check architecture"], {
     env: { ...process.env, PATH: `${fake.dir}:${process.env.PATH}`, CLAUDE_COMPANION_STATE_ROOT: stateRoot },
     cwd: stateRoot,
     encoding: "utf8"
@@ -633,7 +636,7 @@ console.error("unsupported"); process.exit(2);
 `);
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "claude-state-"));
   const env = { ...process.env, PATH: `${fake.dir}:${process.env.PATH}`, CLAUDE_COMPANION_STATE_ROOT: stateRoot };
-  const stdout = execFileSync(process.execPath, [companion.pathname, "rescue", "--write", "fix the failing test", "--json"], {
+  const stdout = execFileSync(process.execPath, [companion, "rescue", "--write", "fix the failing test", "--json"], {
     env,
     cwd: stateRoot,
     encoding: "utf8"
@@ -644,7 +647,7 @@ console.error("unsupported"); process.exit(2);
   assert.equal(payload.status, "completed");
   assert.equal(payload.output, "rescued");
 
-  const result = execFileSync(process.execPath, [companion.pathname, "result", payload.jobId, "--json"], {
+  const result = execFileSync(process.execPath, [companion, "result", payload.jobId, "--json"], {
     env,
     cwd: stateRoot,
     encoding: "utf8"
@@ -668,7 +671,7 @@ console.error("unsupported"); process.exit(2);
 `);
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "claude-state-"));
   const env = { ...process.env, PATH: `${fake.dir}:${process.env.PATH}`, CLAUDE_COMPANION_STATE_ROOT: stateRoot };
-  const stdout = execFileSync(process.execPath, [companion.pathname, "rescue", "diagnose the failure", "--json"], {
+  const stdout = execFileSync(process.execPath, [companion, "rescue", "diagnose the failure", "--json"], {
     env,
     cwd: stateRoot,
     encoding: "utf8"
@@ -701,7 +704,7 @@ console.error("unsupported"); process.exit(2);
   const env = { ...process.env, PATH: `${fake.dir}:${process.env.PATH}`, CLAUDE_COMPANION_STATE_ROOT: stateRoot };
   const stdout = execFileSync(
     process.execPath,
-    [companion.pathname, "do", "--write", "--model", "sonnet", "implement the prepared task", "--json"],
+    [companion, "do", "--write", "--model", "sonnet", "implement the prepared task", "--json"],
     { env, cwd: stateRoot, encoding: "utf8" }
   );
   const payload = JSON.parse(stdout);
@@ -716,7 +719,7 @@ test("foreground timeout fails the job without hanging", () => {
 setTimeout(() => {}, 5000);
 `);
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "claude-state-"));
-  const result = spawnSync(process.execPath, [companion.pathname, "advise", "--timeout-ms", "50", "--no-background-fallback", "slow"], {
+  const result = spawnSync(process.execPath, [companion, "advise", "--timeout-ms", "50", "--no-background-fallback", "slow"], {
     env: { ...process.env, PATH: `${fake.dir}:${process.env.PATH}`, CLAUDE_COMPANION_STATE_ROOT: stateRoot },
     cwd: stateRoot,
     encoding: "utf8"
