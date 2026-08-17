@@ -55,7 +55,7 @@ const statusBefore = run("git", ["status", "--short"]);
 const stateRoot = fs.mkdtempSync(path.join(repoRoot, ".claude-plugin-codex-e2e-state-"));
 let execOutput;
 try {
-  execOutput = run("codex", ["exec", "--cd", repoRoot, "--json", advisePrompt], {
+  execOutput = run("codex", ["exec", "--sandbox", "workspace-write", "--cd", repoRoot, "--json", advisePrompt], {
     input: "",
     env: { ...process.env, CLAUDE_COMPANION_STATE_ROOT: stateRoot }
   });

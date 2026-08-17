@@ -55,5 +55,6 @@ assert.match(readme, /tasks-for-sonnet/);
 assert.match(readme, /\$claude do --model opus/);
 assert.match(readme, /\$claude advise --model sonnet/);
 assert.match(e2e, /--model sonnet/);
+assert.match(e2e, /"--sandbox", "workspace-write"/);
 
 console.log("plugin metadata ok");

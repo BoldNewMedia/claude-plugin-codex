@@ -313,9 +313,10 @@ npm run test:e2e:codex
 This requires `codex plugin marketplace add ./`, `Claude` installed from
 Codex's plugin directory, and a logged-in Claude Code CLI. It starts a fresh
 `codex exec` session and verifies that `$claude advise --model sonnet` routes
-through the installed skill. The test supplies and removes a private temporary
-companion state root inside the checkout so the nested Codex sandbox can write
-job state. Sonnet is used only for this small routing test.
+through the installed skill. The test uses Codex's `workspace-write` sandbox,
+supplies a private temporary companion state root inside the checkout, and
+removes that state before checking the worktree. Sonnet is used only for this
+small routing test.
 
 ## Current Limits
 
