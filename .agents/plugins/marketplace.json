@@ -1,7 +1,7 @@
 {
   "name": "claude-plugin-codex",
   "interface": {
-    "displayName": "Claude Plugin Codex"
+    "displayName": "Claude Code Advisor for Codex"
   },
   "plugins": [
     {

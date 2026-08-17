@@ -1,0 +1,25 @@
+{
+  "assets": [
+    {
+      "file": "social-preview.png",
+      "source": "social-preview.svg",
+      "width": 1280,
+      "height": 640,
+      "purpose": "GitHub social preview and link-sharing card"
+    },
+    {
+      "file": "claude-code-advisor-demo.png",
+      "source": "claude-code-advisor-demo.svg",
+      "width": 1280,
+      "height": 800,
+      "purpose": "Static install and adversarial-review walkthrough"
+    }
+  ],
+  "provenance": {
+    "method": "Deterministic SVG composition rasterised locally with ImageMagick",
+    "externalDownloads": false,
+    "aiImageGeneration": false,
+    "brandSource": "plugins/claude-code-advisor/assets/icon.svg",
+    "notes": "The demo finding is sanitised illustrative copy and is not presented as a result from this repository."
+  }
+}
