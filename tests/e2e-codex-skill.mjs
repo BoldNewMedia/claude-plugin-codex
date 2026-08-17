@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
-import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -53,7 +52,7 @@ assert.match(
 );
 
 const statusBefore = run("git", ["status", "--short"]);
-const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "claude-plugin-codex-e2e-state-"));
+const stateRoot = fs.mkdtempSync(path.join(repoRoot, ".claude-plugin-codex-e2e-state-"));
 let execOutput;
 try {
   execOutput = run("codex", ["exec", "--cd", repoRoot, "--json", advisePrompt], {
