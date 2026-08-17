@@ -83,13 +83,16 @@ export function loadState(stateDir) {
 }
 
 export function saveState(stateDir, state) {
-  fs.mkdirSync(stateDir, { recursive: true });
+  fs.mkdirSync(stateDir, { recursive: true, mode: 0o700 });
+  fs.chmodSync(stateDir, 0o700);
   const next = {
     ...emptyState(),
     ...state,
     jobs: [...(state.jobs || [])].sort((a, b) => String(b.updatedAt || "").localeCompare(String(a.updatedAt || "")))
   };
-  fs.writeFileSync(path.join(stateDir, "state.json"), `${JSON.stringify(next, null, 2)}\n`, "utf8");
+  const stateFile = path.join(stateDir, "state.json");
+  fs.writeFileSync(stateFile, `${JSON.stringify(next, null, 2)}\n`, { encoding: "utf8", mode: 0o600 });
+  fs.chmodSync(stateFile, 0o600);
   return next;
 }
 
@@ -279,34 +282,34 @@ export function parseClaudeJsonResult(raw) {
 
 function normalizeClaudeResult(raw) {
   const trimmed = String(raw || "").trim();
-  if (trimmed.startsWith("{")) {
-    return trimmed;
-  }
   const toolCalls = trimmed.match(/^<function_calls>[\s\S]*?<\/function_calls>\s*/);
   const withoutToolCalls = toolCalls ? trimmed.slice(toolCalls[0].length).trim() : trimmed;
-  if (withoutToolCalls.startsWith("{")) {
+  try {
+    JSON.parse(withoutToolCalls);
     return withoutToolCalls;
+  } catch {
+    const candidates = extractJsonObjects(withoutToolCalls);
+    if (candidates.length > 1) {
+      throw new Error("Ambiguous JSON Claude result: multiple complete objects were returned.");
+    }
+    return candidates[0] || withoutToolCalls;
   }
-  return extractFirstJsonObject(withoutToolCalls) || withoutToolCalls;
 }
 
-function extractFirstJsonObject(value) {
+function extractJsonObjects(value) {
   const text = String(value || "");
-  const start = text.indexOf("{");
-  if (start === -1) {
-    return null;
-  }
-
+  const objects = [];
+  let start = -1;
   let depth = 0;
   let inString = false;
   let escaped = false;
-  for (let index = start; index < text.length; index += 1) {
+  for (let index = 0; index < text.length; index += 1) {
     const char = text[index];
     if (escaped) {
       escaped = false;
       continue;
     }
-    if (char === "\\") {
+    if (inString && char === "\\") {
       escaped = true;
       continue;
     }
@@ -318,15 +321,19 @@ function extractFirstJsonObject(value) {
       continue;
     }
     if (char === "{") {
+      if (depth === 0) {
+        start = index;
+      }
       depth += 1;
-    } else if (char === "}") {
+    } else if (char === "}" && depth > 0) {
       depth -= 1;
       if (depth === 0) {
-        return text.slice(start, index + 1).trim();
+        objects.push(text.slice(start, index + 1).trim());
+        start = -1;
       }
     }
   }
-  return null;
+  return objects;
 }
 
 export function buildReviewPrompt({ kind, targetLabel, gitContext, focus = "" }) {

@@ -289,6 +289,9 @@ The companion owns:
 
 ## Development
 
+Use Node.js 24 for development. The repository includes `.node-version` for
+compatible version managers, and CI also checks Node.js 20 and 22 compatibility.
+
 ```bash
 npm test
 npm run validate
@@ -329,12 +332,17 @@ through the installed skill. Sonnet is used only for this small routing test.
 - Foreground prepared task routes use a larger default turn budget than
   structured review. If Claude reports that it hit the max-turn limit, rerun
   with `--max-turns <higher>` or narrow the task.
+- Working-tree structured reviews stop when untracked files exist because their
+  contents are absent from a Git diff and review mode cannot read the workspace.
+  Stage the intended files before rerunning the review.
 - `$claude monitor` checks a background job every 30 seconds by default. It
-  reads `claude logs` and `claude agents`, filters routine terminal noise, and
-  marks repeated output as stale after two minutes.
-- Structured review depends on Claude returning valid JSON inside the
-  `--output-format json` result envelope. The companion validates and retries
-  once before failing.
+  reads `claude logs` and `claude agents --json --all`, filters routine terminal
+  noise, and marks repeated output as stale after two minutes.
+- Structured review extracts a single complete JSON object from Claude's
+  `--output-format json` result envelope, tolerating leading status prose or
+  tool-call markup while rejecting ambiguous multiple objects. The extracted
+  review payload is still validated strictly, and the companion retries once
+  before failing.
 
 ## Troubleshooting
 
@@ -345,8 +353,10 @@ a plugin version bump. If the error remains, remove and reinstall the
 
 If `$claude setup` or a companion command fails with a write permission error
 under `~/.codex/claude-plugin-codex`, rerun it with `CLAUDE_COMPANION_STATE_ROOT`
-pointing at a writable private directory. Do not point it at the project
-repository unless you also ignore that path in Git.
+pointing at a writable directory. Within that root, the companion restricts its
+workspace and thread directories to mode `0700` and state/pointer files to mode
+`0600`. Do not point it at the project repository unless you also ignore that
+path in Git.
 
 ## License
 

@@ -317,19 +317,36 @@ function assertBackgroundMcpSafe(ctx, options = {}) {
 
 function persistContext(ctx, state) {
   const saved = saveState(ctx.stateDir, state);
-  fs.mkdirSync(ctx.indexDir, { recursive: true });
-  fs.writeFileSync(path.join(ctx.indexDir, "latest-state-dir"), `${ctx.stateDir}\n`, "utf8");
+  fs.mkdirSync(ctx.indexDir, { recursive: true, mode: 0o700 });
+  fs.chmodSync(ctx.indexDir, 0o700);
+  const latestStateFile = path.join(ctx.indexDir, "latest-state-dir");
+  fs.writeFileSync(latestStateFile, `${ctx.stateDir}\n`, { encoding: "utf8", mode: 0o600 });
+  fs.chmodSync(latestStateFile, 0o600);
   return saved;
 }
 
 function gitContext(cwd, options = {}) {
   const target = options.base ? `${options.base}...HEAD` : null;
+  if (!target) {
+    const untracked = spawnSync("git", ["ls-files", "--others", "--exclude-standard"], { cwd, encoding: "utf8" });
+    const paths = untracked.status === 0 ? untracked.stdout.trim().split(/\r?\n/).filter(Boolean) : [];
+    if (paths.length) {
+      const shown = paths.slice(0, 20).map((file) => `- ${file}`).join("\n");
+      const remaining = paths.length > 20 ? `\n- ...and ${paths.length - 20} more` : "";
+      throw new Error(
+        `Working-tree review cannot safely include untracked file contents. Stage the intended files first:\n${shown}${remaining}`
+      );
+    }
+  }
   const args = target ? ["diff", "--stat", target] : ["status", "--short", "--untracked-files=all"];
   const result = spawnSync("git", args, { cwd, encoding: "utf8" });
   const first = result.status === 0 ? result.stdout : result.stderr;
-  const diffArgs = target ? ["diff", "--", target] : ["diff", "--"];
-  const diff = spawnSync("git", diffArgs, { cwd, encoding: "utf8", maxBuffer: 1024 * 1024 });
-  return [first, diff.status === 0 ? diff.stdout : ""].join("\n").trim();
+  const diffArgs = target ? ["diff", target, "--"] : ["diff", "HEAD", "--"];
+  let diff = spawnSync("git", diffArgs, { cwd, encoding: "utf8", maxBuffer: 1024 * 1024 });
+  if (!target && diff.status !== 0) {
+    diff = spawnSync("git", ["diff", "--"], { cwd, encoding: "utf8", maxBuffer: 1024 * 1024 });
+  }
+  return [first, diff.status === 0 ? diff.stdout : diff.stderr].join("\n").trim();
 }
 
 function detectCapabilities() {
@@ -609,7 +626,7 @@ function readLiveStatus(job, options = {}) {
   }
   const timeoutMs = Number(options["timeout-ms"] || 10000);
   const logs = runClaude(["logs", job.claudeSessionId], { timeoutMs });
-  const agents = runClaude(["agents", "--json"], { timeoutMs });
+  const agents = runClaude(["agents", "--json", "--all"], { timeoutMs });
   const agentsOutput = stripTerminalControl(`${agents.stdout || ""}${agents.stderr || ""}`);
   const logsOutput = stripTerminalControl(`${logs.stdout || ""}${logs.stderr || ""}`);
   const agentStatus = agents.status === 0 ? parseAgentsJson(agentsOutput, job.claudeSessionId) : { output: agentsOutput };
@@ -801,10 +818,17 @@ function handleCancel(argv) {
     try {
       const live = summarizeLiveStatus(readLiveStatus(job, options), {}, options);
       latest = persistMonitorSnapshot(ctx, job, live);
+      if (live.completed) {
+        output({ jobId: latest.id, status: "completed" }, options.json);
+        return;
+      }
     } catch {
       latest = job;
     }
-    runClaude(["stop", job.claudeSessionId], { timeoutMs: Number(options["timeout-ms"] || 10000) });
+    const stopped = runClaude(["stop", job.claudeSessionId], { timeoutMs: Number(options["timeout-ms"] || 10000) });
+    if (stopped.status !== 0) {
+      throw new Error(stopped.stderr || stopped.stdout || `Claude failed to stop session ${job.claudeSessionId}.`);
+    }
   }
   const cancelled = completeJob(ctx, latest, { status: "cancelled" });
   output({ jobId: cancelled.id, status: "cancelled" }, options.json);
