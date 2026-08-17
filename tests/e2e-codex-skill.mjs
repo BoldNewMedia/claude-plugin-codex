@@ -18,6 +18,7 @@ function run(command, args, options = {}) {
   const result = spawnSync(command, args, {
     cwd: repoRoot,
     encoding: "utf8",
+    maxBuffer: 16 * 1024 * 1024,
     timeout: 180_000,
     ...options
   });
