@@ -3,10 +3,10 @@
   "version": "0.1.13",
   "description": "Bring local Claude Code into Codex for reviews, prepared tasks, advice, and rescue work.",
   "author": {
-    "name": "Yanchuk"
+    "name": "Yanchuk and contributors"
   },
-  "homepage": "https://github.com/yanchuk/claude-plugin-codex",
-  "repository": "https://github.com/yanchuk/claude-plugin-codex",
+  "homepage": "https://github.com/BoldNewMedia/claude-plugin-codex",
+  "repository": "https://github.com/BoldNewMedia/claude-plugin-codex",
   "license": "MIT",
   "keywords": [
     "codex",
@@ -22,15 +22,15 @@
     "displayName": "Claude",
     "shortDescription": "Ask local Claude Code from Codex.",
     "longDescription": "Use local Claude Code from Codex for read-only reviews, adversarial checks, quick advice, prepared tasks, and explicit rescue work while Codex stays in charge.",
-    "developerName": "Yanchuk",
+    "developerName": "Bold New Media",
     "category": "Coding",
     "capabilities": [
       "Read",
       "Write"
     ],
-    "websiteURL": "https://github.com/yanchuk/claude-plugin-codex",
-    "privacyPolicyURL": "https://github.com/yanchuk/claude-plugin-codex#privacy",
-    "termsOfServiceURL": "https://github.com/yanchuk/claude-plugin-codex#terms",
+    "websiteURL": "https://github.com/BoldNewMedia/claude-plugin-codex",
+    "privacyPolicyURL": "https://github.com/BoldNewMedia/claude-plugin-codex#privacy",
+    "termsOfServiceURL": "https://github.com/BoldNewMedia/claude-plugin-codex#terms",
     "defaultPrompt": [
       "Check Claude Code setup.",
       "Review or adversarially review this diff with Claude Code.",

@@ -7,8 +7,10 @@ Codex remains the orchestrator.
 ## Scope
 
 - Work only in this standalone repo.
-- Do not modify `/Users/yanchuk/Documents/GitHub/skill-arsenal` for this
-  project.
+- Do not modify another checkout or repository for this project.
+- Treat `BoldNewMedia/claude-plugin-codex` as the release authority. Treat
+  `yanchuk/claude-plugin-codex` as a read-only upstream reference.
+- Preserve the original MIT licence and Yanchuk attribution.
 - Do not commit or push unless the latest user instruction explicitly asks for
   it.
 - Keep plugin metadata public-release ready: `.codex-plugin/plugin.json`,

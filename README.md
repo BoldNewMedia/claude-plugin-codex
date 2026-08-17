@@ -1,11 +1,16 @@
 # claude-plugin-codex
 
+Maintained by [Bold New Media](https://github.com/BoldNewMedia). From v0.1.13,
+releases come from this maintained fork of the original
+[`yanchuk/claude-plugin-codex`](https://github.com/yanchuk/claude-plugin-codex)
+project and retains its MIT licence and attribution.
+
 ## Install
 
 Add the public marketplace:
 
 ```bash
-codex plugin marketplace add yanchuk/claude-plugin-codex
+codex plugin marketplace add BoldNewMedia/claude-plugin-codex
 ```
 
 Then open Codex's plugin directory, find `Claude Plugin Codex`, and install
