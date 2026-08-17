@@ -1,0 +1,56 @@
+name: Feature request
+description: Propose a focused improvement to Claude Code Advisor for Codex
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Describe the user problem before the implementation. Do not include credentials, private source code or other sensitive material.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Pre-submission checks
+      options:
+        - label: I searched existing issues and pull requests for this proposal.
+          required: true
+        - label: This proposal is within the plugin's Codex and local Claude Code integration scope.
+          required: true
+        - label: This request contains no credentials, tokens, private source code or personal information.
+          required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: What is difficult or impossible today, and who is affected?
+    validations:
+      required: true
+  - type: textarea
+    id: outcome
+    attributes:
+      label: Desired outcome
+      description: Describe the observable result rather than only a proposed implementation.
+    validations:
+      required: true
+  - type: textarea
+    id: approach
+    attributes:
+      label: Suggested approach
+      description: Optional implementation ideas and trade-offs.
+    validations:
+      required: false
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Existing commands, workarounds or simpler alternatives you tried.
+    validations:
+      required: false
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Add relevant, non-sensitive examples or links.
+    validations:
+      required: false

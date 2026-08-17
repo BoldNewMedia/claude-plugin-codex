@@ -1,0 +1,92 @@
+name: Bug report
+description: Report a reproducible problem with Claude Code Advisor for Codex
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not post security vulnerabilities or secrets here. Report vulnerabilities using SECURITY.md. Sanitise every log and attachment.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Pre-submission checks
+      options:
+        - label: I searched existing issues for this problem.
+          required: true
+        - label: I tested the latest release and started a new Codex thread or restarted Codex.
+          required: true
+        - label: This report contains no credentials, tokens, cookies, session data, private source code or personal information.
+          required: true
+        - label: This is not a security vulnerability.
+          required: true
+  - type: input
+    id: plugin-version
+    attributes:
+      label: Plugin version
+      placeholder: 0.1.14 or commit SHA
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      description: Operating system and architecture
+      placeholder: macOS 15.6, Apple silicon
+    validations:
+      required: true
+  - type: input
+    id: tool-versions
+    attributes:
+      label: Tool versions
+      description: Codex, Claude Code and Node.js versions
+      placeholder: Codex x.y.z, Claude Code x.y.z, Node.js x.y.z
+    validations:
+      required: true
+  - type: textarea
+    id: command
+    attributes:
+      label: Command or action
+      description: Provide the exact command after removing sensitive values.
+      render: text
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Minimal reproduction
+      description: List the smallest sequence that consistently reproduces the problem.
+      placeholder: |
+        1. Install the plugin...
+        2. Start a new Codex thread...
+        3. Run...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behaviour
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Observed behaviour
+    validations:
+      required: true
+  - type: textarea
+    id: diagnostics
+    attributes:
+      label: Sanitised diagnostics
+      description: Include only the smallest relevant output. Remove secrets, private paths, private prompts, private source and personal information.
+      render: text
+    validations:
+      required: false
+  - type: textarea
+    id: context
+    attributes:
+      label: Additional context
+      description: Add other relevant, non-sensitive details or sanitised screenshots.
+    validations:
+      required: false

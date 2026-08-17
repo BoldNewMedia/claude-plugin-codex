@@ -1,20 +1,34 @@
-# claude-plugin-codex
+# Claude Code Advisor for Codex
+
+[![CI](https://github.com/BoldNewMedia/claude-plugin-codex/actions/workflows/ci.yml/badge.svg)](https://github.com/BoldNewMedia/claude-plugin-codex/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/BoldNewMedia/claude-plugin-codex)](https://github.com/BoldNewMedia/claude-plugin-codex/releases)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
+Catch hidden assumptions in Codex changes with a read-only Claude Code review,
+without leaving Codex. Codex stays in charge of the task; your existing local
+Claude Code installation supplies the second opinion.
+
+![Claude Code Advisor for Codex demo](docs/assets/claude-code-advisor-demo.png)
+
+This is an unofficial, community-maintained integration. It is not endorsed by
+or affiliated with OpenAI or Anthropic.
 
 Maintained by [Bold New Media](https://github.com/BoldNewMedia). From v0.1.13,
 releases come from this maintained fork of the original
 [`yanchuk/claude-plugin-codex`](https://github.com/yanchuk/claude-plugin-codex)
-project and retains its MIT licence and attribution.
+project. The project retains its MIT licence and original attribution.
 
 ## Install
 
-Add the public marketplace:
+Add the public marketplace and install the plugin:
 
 ```bash
 codex plugin marketplace add BoldNewMedia/claude-plugin-codex
+codex plugin add claude-code-advisor@claude-plugin-codex
 ```
 
-Then open Codex's plugin directory, find `Claude Plugin Codex`, and install
-`Claude`.
+Alternatively, after adding the marketplace, open Codex's plugin directory,
+find **Claude Code Advisor for Codex**, and install **Claude Code Advisor**.
 
 Start a new Codex thread and verify the install:
 
@@ -24,6 +38,21 @@ $claude setup
 
 If Codex was already running, start a new thread or restart Codex before using
 `$claude`.
+
+To update the marketplace snapshot and reinstall the current plugin version:
+
+```bash
+codex plugin marketplace upgrade claude-plugin-codex
+codex plugin remove claude-code-advisor@claude-plugin-codex
+codex plugin add claude-code-advisor@claude-plugin-codex
+```
+
+To remove the plugin and its marketplace source:
+
+```bash
+codex plugin remove claude-code-advisor@claude-plugin-codex
+codex plugin marketplace remove claude-plugin-codex
+```
 
 ## What It Is
 
@@ -43,11 +72,27 @@ This is the inverse of
 plugin pulls Codex into Claude Code. This one pulls local Claude Code into
 Codex.
 
-## Status
+## Status and compatibility
 
-Alpha. The Codex marketplace flow has been verified with Codex CLI `0.130.0`.
+Alpha. Use it on real work only with normal review and source-control controls.
 The stable command form is `$claude`. If your Codex UI exposes the skill as
 `/claude`, you can use that as an alias.
+
+| Component | Verified status |
+|---|---|
+| Codex CLI | Marketplace and end-to-end routing verified with `0.130.0` |
+| Claude Code CLI | Capability detection verified with `2.1.201`; an authenticated local account is required |
+| Node.js | Automated tests run on 20, 22 and 24; runtime minimum is 18.18 |
+| macOS | Live local workflow verified |
+| Linux | Deterministic tests and metadata validation run in GitHub Actions |
+| Windows | Not yet independently verified; tester reports are welcome |
+
+Before beta, the project needs repeatable external installation results on
+macOS, Linux and Windows, with no unresolved recurring permission or background
+lifecycle defects.
+
+See the [alpha testing guide](docs/alpha-testing.md) to join the initial
+compatibility cohort. Windows and Linux reports are particularly useful.
 
 ## Core Commands
 
@@ -64,6 +109,9 @@ The stable command form is `$claude`. If your Codex UI exposes the skill as
 - `$claude monitor` polls a background Claude job and reports whether Claude is
   active, stale, or finished.
 - `$claude status`, `$claude result`, and `$claude cancel` manage Claude jobs.
+
+See the [command reference](docs/commands.md) for complete syntax, examples and
+safety flags.
 
 Longer jobs can run in the background:
 
@@ -249,6 +297,9 @@ so `$claude status`, `$claude result`, and `$claude cancel` can work across
 turns. It does not intentionally collect analytics, phone home, or send data to
 the repository owner.
 
+See the full [privacy policy](PRIVACY.md) for data categories, recipients,
+retention and user controls.
+
 ## State Storage
 
 By default the companion stores state under:
@@ -272,7 +323,8 @@ workspace paths, and review results.
 ## Terms
 
 This project is provided under the MIT License. You are responsible for how you
-use Codex, Claude Code, and any data you send through those tools.
+use Codex, Claude Code, and any data you send through those tools. See the full
+[terms of use](TERMS.md).
 
 ## How It Works
 
@@ -315,10 +367,11 @@ Optional end-to-end smoke test against an installed Codex plugin:
 npm run test:e2e:codex
 ```
 
-This requires `codex plugin marketplace add ./`, `Claude` installed from
-Codex's plugin directory, and a logged-in Claude Code CLI. It starts a fresh
-`codex exec` session and verifies that `$claude advise --model sonnet` routes
-through the installed skill. The test uses Codex's `workspace-write` sandbox,
+This requires `codex plugin marketplace add ./`, **Claude Code Advisor**
+installed from Codex's plugin directory, and a logged-in Claude Code CLI. It
+starts a fresh `codex exec` session and verifies that
+`$claude advise --model sonnet` routes through the installed skill. The test
+uses Codex's `workspace-write` sandbox,
 supplies a private temporary companion state root inside the checkout, and
 removes that state before checking the worktree. Sonnet is used only for this
 small routing test.

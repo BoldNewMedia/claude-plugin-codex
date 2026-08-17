@@ -11,7 +11,7 @@ const e2e = fs.readFileSync("tests/e2e-codex-skill.mjs", "utf8");
 assert.equal(manifest.name, "claude-code-advisor");
 assert.equal(manifest.version, packageJson.version);
 assert.equal(manifest.skills, "./skills/");
-assert.equal(manifest.interface?.displayName, "Claude");
+assert.equal(manifest.interface?.displayName, "Claude Code Advisor");
 assert.deepEqual(manifest.interface?.capabilities, ["Read", "Write"]);
 assert.ok(manifest.interface?.defaultPrompt?.length <= 3);
 assert.ok(manifest.interface.defaultPrompt.every((prompt) => prompt.length <= 128));
@@ -19,13 +19,33 @@ assert.equal(manifest.homepage, "https://github.com/BoldNewMedia/claude-plugin-c
 assert.equal(manifest.repository, "https://github.com/BoldNewMedia/claude-plugin-codex");
 assert.equal(manifest.interface?.developerName, "Bold New Media");
 assert.equal(manifest.interface?.websiteURL, "https://github.com/BoldNewMedia/claude-plugin-codex");
-assert.equal(manifest.interface?.privacyPolicyURL, "https://github.com/BoldNewMedia/claude-plugin-codex#privacy");
-assert.equal(manifest.interface?.termsOfServiceURL, "https://github.com/BoldNewMedia/claude-plugin-codex#terms");
+assert.equal(manifest.interface?.privacyPolicyURL, "https://github.com/BoldNewMedia/claude-plugin-codex/blob/main/PRIVACY.md");
+assert.equal(manifest.interface?.termsOfServiceURL, "https://github.com/BoldNewMedia/claude-plugin-codex/blob/main/TERMS.md");
 assert.match(readme, /codex plugin marketplace add BoldNewMedia\/claude-plugin-codex/);
+assert.match(readme, /codex plugin add claude-code-advisor@claude-plugin-codex/);
 assert.match(readme, /maintained fork/);
 assert.doesNotMatch(readme, /codex plugin marketplace add yanchuk\/claude-plugin-codex/);
+assert.equal(marketplace.interface?.displayName, "Claude Code Advisor for Codex");
 assert.ok(fs.existsSync("plugins/claude-code-advisor/assets/icon.svg"));
 assert.ok(fs.existsSync("plugins/claude-code-advisor/assets/logo.svg"));
+for (const publicPath of [
+  "CHANGELOG.md",
+  "CODE_OF_CONDUCT.md",
+  "CONTRIBUTING.md",
+  "PRIVACY.md",
+  "SECURITY.md",
+  "SUPPORT.md",
+  "TERMS.md",
+  "docs/alpha-testing.md",
+  "docs/commands.md",
+  "docs/assets/social-preview.png",
+  "docs/assets/claude-code-advisor-demo.png",
+  ".github/ISSUE_TEMPLATE/bug_report.yml",
+  ".github/ISSUE_TEMPLATE/feature_request.yml",
+  ".github/pull_request_template.md",
+]) {
+  assert.ok(fs.existsSync(publicPath), `missing public-release file: ${publicPath}`);
+}
 assert.equal(fs.readlinkSync("CLAUDE.md"), "AGENTS.md");
 assert.ok(marketplace.plugins.some((plugin) => plugin.name === "claude-code-advisor"));
 assert.equal(packageJson.scripts["test:e2e:codex"], "node tests/e2e-codex-skill.mjs");

@@ -1,6 +1,6 @@
 {
   "name": "claude-code-advisor",
-  "version": "0.1.13",
+  "version": "0.1.14",
   "description": "Bring local Claude Code into Codex for reviews, prepared tasks, advice, and rescue work.",
   "author": {
     "name": "Yanchuk and contributors"
@@ -19,9 +19,9 @@
   ],
   "skills": "./skills/",
   "interface": {
-    "displayName": "Claude",
-    "shortDescription": "Ask local Claude Code from Codex.",
-    "longDescription": "Use local Claude Code from Codex for read-only reviews, adversarial checks, quick advice, prepared tasks, and explicit rescue work while Codex stays in charge.",
+    "displayName": "Claude Code Advisor",
+    "shortDescription": "Run local Claude Code reviews from Codex.",
+    "longDescription": "Community-maintained integration for using local Claude Code from Codex for read-only reviews, adversarial checks, quick advice, prepared tasks, and explicit rescue work while Codex stays in charge.",
     "developerName": "Bold New Media",
     "category": "Coding",
     "capabilities": [
@@ -29,8 +29,8 @@
       "Write"
     ],
     "websiteURL": "https://github.com/BoldNewMedia/claude-plugin-codex",
-    "privacyPolicyURL": "https://github.com/BoldNewMedia/claude-plugin-codex#privacy",
-    "termsOfServiceURL": "https://github.com/BoldNewMedia/claude-plugin-codex#terms",
+    "privacyPolicyURL": "https://github.com/BoldNewMedia/claude-plugin-codex/blob/main/PRIVACY.md",
+    "termsOfServiceURL": "https://github.com/BoldNewMedia/claude-plugin-codex/blob/main/TERMS.md",
     "defaultPrompt": [
       "Check Claude Code setup.",
       "Review or adversarially review this diff with Claude Code.",
