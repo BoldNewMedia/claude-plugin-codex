@@ -83,7 +83,8 @@ $claude advise Should this queue use at-least-once or exactly-once delivery?
 $claude advise --background Review this migration plan for data-loss risks.
 ```
 
-`advise` can use web tools. It is read-only unless `--write` is explicit.
+`advise` is read-only unless `--write` is explicit. Web tools are denied by
+default; add `--allow-web` only when the question requires external sources.
 
 ### `do`
 
@@ -136,6 +137,14 @@ $claude rescue --resume --background Continue the selected Claude job from its s
 
 `rescue` is read-only unless `--write` is explicit.
 
+Resume uses only a canonical full Claude session UUID from a previously
+validated provider JSON result. Plugin job and supervisor lifecycle IDs are
+never passed to `--resume`. A resumed result must return the same UUID. Legacy
+ambiguous records are not reconciled from logs or resumed. `--resume
+--background` continues the selected conversation and cannot silently create a
+fresh one.
+A read-only rescue cannot resume a write-capable job.
+
 ### `review`
 
 Runs a short, structured, read-only review of local Git state.
@@ -151,7 +160,11 @@ $claude review
 $claude review --base main
 ```
 
-Untracked files are not present in a Git diff. Stage intended new files before relying on structured review.
+Untracked files are not present in a Git diff. Stage intended new files before
+relying on structured review. Working-tree and `--base` reviews also stop
+before Claude is invoked if Git fails or the complete diff exceeds 1 MiB.
+Narrow or split the change and rerun; incomplete diffs are never downgraded to
+stat-only reviews.
 
 ### `adversarial-review`
 
@@ -170,7 +183,7 @@ $claude adversarial-review --base main Focus on authentication bypass and data l
 
 ### `monitor`
 
-Polls logs and agent state for a managed background job.
+Polls plugin-managed supervisor state for a background job.
 
 ```text
 $claude monitor [job-id]
@@ -182,7 +195,10 @@ Example:
 $claude monitor claude-job-123
 ```
 
-The normal monitor interval is 30 seconds. It reports active, stale or finished state and the latest meaningful output.
+The normal monitor interval is 30 seconds. Monitor reports the persisted
+monotonic state: `created`, `starting`, `running`, `cancelling`, `completed`,
+`cancelled`, `failed` or `interrupted`. It does not call `claude logs`, scrape
+terminal text or promote progress to a result.
 
 ### `status`
 
@@ -201,15 +217,25 @@ $claude status claude-job-123
 
 ### `result`
 
-Returns the saved result for a managed job.
+Returns the authoritative final assistant answer for a managed job.
 
 ```text
 $claude result <job-id>
 ```
 
+For new jobs, a result is authoritative only after the supervised print process
+closes stdout, exits successfully, remains within its streaming limits and
+emits exactly one schema-valid UTF-8 JSON document. The envelope must contain a
+successful string result and canonical session UUID. Stderr, terminal text,
+partial JSON and legacy framing are never new-job result sources. Existing
+legacy records remain readable only when their result was already durably
+authoritative. Repeated calls preserve the immutable result and timestamp.
+
 ### `cancel`
 
-Stops a managed background job. Saved output may still be recoverable with `result`.
+Requests cancellation from the live supervisor, which terminates and reaps the
+owned Claude process group before committing cleanup. A persisted PID alone is
+never signalling authority. A previously committed result remains available.
 
 ```text
 $claude cancel <job-id>
@@ -252,8 +278,8 @@ Use background mode for substantial prompts, large context or work likely to tak
 | `--model sonnet` | Use Sonnet only for a prepared, bounded junior-agent task. |
 | `--max-turns <n>` | Override the default Claude turn budget. |
 | `--base <ref>` | Compare a review against a Git reference such as `main`. |
-| `--resume` | Continue a selected saved Claude job. |
-| `--allow-web` | Permit web tools for a prepared `do` or `rescue` task. Use only when external sources are required. |
+| `--resume` | Continue a selected saved Claude job using its canonical full session UUID. |
+| `--allow-web` | Permit web tools for `advise`, `do` or `rescue`. Use only when external sources are required. |
 | `--allow-mcp` | Permit project MCP servers. Use only after explicit approval. |
 
 Advanced companion flags normally managed by Codex include `--effort <level>`, `--no-background-fallback`, `--interval-ms <ms>`, `--max-checks <n>`, `--stale-after-ms <ms>`, `--watch` and `--json`.
@@ -262,9 +288,13 @@ Advanced companion flags normally managed by Codex include `--effort <level>`, `
 
 - `review` and `adversarial-review` are read-only.
 - `advise`, `do` and `rescue` require explicit `--write` before Claude can modify files.
-- Project MCP servers are isolated by default. Background mode refuses workspaces containing `.mcp.json` unless `--allow-mcp` is explicitly approved.
-- Prepared local `do` and `rescue` tasks use local read tools by default. Add `--allow-web` only when the task genuinely needs external sources.
+- An empty strict MCP configuration restricts project MCP servers by default. Background mode refuses workspaces containing `.mcp.json` unless `--allow-mcp` is explicitly approved.
+- Read-only `advise`, `do` and `rescue` tasks use local read tools by default. Add `--allow-web` only when the task genuinely needs external sources.
 - Do not default ordinary advice or review work to Sonnet. Use the configured Claude model unless a specific model is justified.
+
+Companion state updates are locked, reloaded and atomically replaced. Malformed
+JSON and unsupported schema versions are visible errors with the original
+evidence preserved; they are never silently treated as empty state.
 
 ## Slash aliases
 
