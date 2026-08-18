@@ -231,6 +231,7 @@ function runClaude(args, options = {}) {
     cwd: options.cwd || process.cwd(),
     env,
     encoding: "utf8",
+    input: options.input,
     timeout: options.timeoutMs ?? DEFAULT_TIMEOUT_MS
   });
 
@@ -260,8 +261,8 @@ function isMaxTurnLimitOutput(value) {
   return /\b(?:hit|reached)\s+(?:the\s+)?max[- ]turns?\b/i.test(text) || /\bmax[- ]turn limit\b/i.test(text);
 }
 
-function commandAvailable(commandArgs) {
-  const result = runClaude(commandArgs, { timeoutMs: 10000 });
+function commandAvailable(commandArgs, input) {
+  const result = runClaude(commandArgs, { input, timeoutMs: 10000 });
   return result.status === 0;
 }
 
@@ -499,7 +500,7 @@ function detectCapabilities() {
   const versionResult = runClaude(["--version"], { timeoutMs: 10000 });
   const version = parseClaudeVersion(versionResult.stdout || versionResult.stderr);
   const auth = runClaude(["auth", "status", "--text"], { timeoutMs: 10000 });
-  const print = commandAvailable(["-p", "Return {}", "--output-format", "text", "--max-turns", "1", "--tools", ""]);
+  const print = commandAvailable(["-p", "--output-format", "text", "--max-turns", "1", "--tools", ""], "Return {}");
   const background = version.supported && print && process.platform === "darwin";
   return {
     version,
@@ -635,7 +636,11 @@ async function runForeground(ctx, kind, prompt, options = {}) {
   });
   let result;
   try {
-    result = runClaude(args, { cwd: ctx.cwd, timeoutMs: Number(options.timeoutMs || DEFAULT_TIMEOUT_MS) });
+    result = runClaude(args, {
+      cwd: ctx.cwd,
+      input: prompt,
+      timeoutMs: Number(options.timeoutMs || DEFAULT_TIMEOUT_MS)
+    });
   } catch (error) {
     if (isTimeoutError(error) && !options["no-background-fallback"]) {
       completeJob(ctx, job, {

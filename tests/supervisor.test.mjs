@@ -551,6 +551,19 @@ supervisedTest("foreground and supervised asynchronous resume preserve the valid
   assert.equal(foregroundPayload.status, "completed");
   const foregroundEnvelope = JSON.parse(foregroundPayload.output);
   assert.equal(foregroundEnvelope.session_id, SESSION_ID);
+  const foregroundInvocation = readInvocations(harness).find((entry) =>
+    entry.args.includes("--resume") &&
+    Buffer.from(entry.stdinBase64, "base64").toString("utf8") === "second"
+  );
+  assert.ok(foregroundInvocation);
+  assert.deepEqual(
+    foregroundInvocation.args.slice(
+      foregroundInvocation.args.indexOf("--resume"),
+      foregroundInvocation.args.indexOf("--resume") + 2
+    ),
+    ["--resume", SESSION_ID]
+  );
+  assert.equal(foregroundInvocation.args.includes("second"), false);
   const resumed = runCompanion(harness, [
     "rescue", "--background", "--resume", "--job-id", foregroundPayload.jobId, "third"
   ]);

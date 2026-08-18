@@ -594,7 +594,7 @@ export function buildClaudeArgs(options) {
     assertCanonicalResumeReference(resumeSessionId);
     args.push("--resume", resumeSessionId);
   }
-  args.push("-p", prompt);
+  args.push("-p");
   args.push("--output-format", outputFormat);
   args.push("--max-turns", String(maxTurns));
   if (model) {

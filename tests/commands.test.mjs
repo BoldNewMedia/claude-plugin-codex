@@ -6,11 +6,20 @@ import { execFileSync, spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import test from "node:test";
 
+import {
+  buildReviewPrompt,
+  resolveStateDir,
+  saveState,
+  SUPERVISED_RECORD_VERSION,
+  SUPERVISED_TRANSPORT
+} from "../plugins/claude-code-advisor/scripts/lib/runtime.mjs";
+
 const companion = fileURLToPath(
   new URL("../plugins/claude-code-advisor/scripts/claude-companion.mjs", import.meta.url)
 );
 
-const TEST_RESUME_UUID = "123e4567-e89b-42d3-a456-426614174000";
+const darwinTest = process.platform === "darwin" ? test : test.skip;
+const nonDarwinTest = process.platform === "darwin" ? test.skip : test;
 
 function initRepo(prefix = "claude-command-repo-") {
   const repo = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
@@ -47,8 +56,10 @@ console.error("unsupported"); process.exit(2);
 `);
 }
 
-test("setup reports supervised background capability without legacy lifecycle commands", () => {
+test("setup reports print capability and only proved supervised background capability", () => {
+  const probeLog = path.join(os.tmpdir(), `fake-setup-probe-${Date.now()}.json`);
   const fake = makeFakeClaude(`
+const fs = require("node:fs");
 const args = process.argv.slice(2);
 if (args.includes("--version")) { console.log("2.1.132 (Claude Code)"); process.exit(0); }
 if (args[0] === "auth" && args[1] === "status") { console.log("logged in"); process.exit(0); }
@@ -56,7 +67,11 @@ if (args[0] === "logs") process.exit(2);
 if (args[0] === "stop") process.exit(2);
 if (args[0] === "attach") process.exit(2);
 if (args[0] === "agents") process.exit(2);
-if (args.includes("-p")) { console.log("{}"); process.exit(0); }
+if (args.includes("-p")) {
+  const stdin = fs.readFileSync(0);
+  fs.writeFileSync(${JSON.stringify(probeLog)}, JSON.stringify({ args, stdinBase64: stdin.toString("base64") }));
+  console.log("{}"); process.exit(0);
+}
 console.error("unsupported"); process.exit(2);
 `);
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "claude-state-"));
@@ -70,7 +85,11 @@ console.error("unsupported"); process.exit(2);
 
   assert.equal(payload.ready, true);
   assert.equal(payload.capabilities.print, true);
-  assert.equal(payload.capabilities.background, true);
+  assert.equal(payload.capabilities.background, process.platform === "darwin");
+  const probe = JSON.parse(fs.readFileSync(probeLog, "utf8"));
+  assert.equal(Buffer.from(probe.stdinBase64, "base64").toString("utf8"), "Return {}");
+  assert.equal(probe.args.includes("Return {}"), false);
+  assert.deepEqual(probe.args.slice(0, 3), ["-p", "--output-format", "text"]);
   assert.equal(fs.statSync(stateRoot).mode & 0o777, 0o755);
   const workspaceIndex = fs.readdirSync(stateRoot).find((entry) => entry.startsWith("claude-state-"));
   assert.ok(workspaceIndex);
@@ -81,6 +100,39 @@ console.error("unsupported"); process.exit(2);
   assert.equal(fs.statSync(stateDir).mode & 0o777, 0o700);
   assert.equal(fs.statSync(path.join(stateDir, "state.json")).mode & 0o777, 0o600);
   assert.equal(fs.statSync(latestStateFile).mode & 0o777, 0o600);
+});
+
+test("foreground prompts reach Claude byte-for-byte through stdin and remain absent from argv", () => {
+  const prompt = "exact foreground prompt\nwith a second line and unicode: café";
+  for (const command of ["advise", "do", "rescue"]) {
+    const invocationLog = path.join(os.tmpdir(), `fake-foreground-stdin-${command}-${Date.now()}.json`);
+    const fake = makeFakeClaude(`
+const fs = require("node:fs");
+const args = process.argv.slice(2);
+if (args.includes("-p")) {
+  const stdin = fs.readFileSync(0);
+  fs.writeFileSync(${JSON.stringify(invocationLog)}, JSON.stringify({ args, stdinBase64: stdin.toString("base64") }));
+  console.log("ok");
+  process.exit(0);
+}
+console.error("unsupported"); process.exit(2);
+`);
+    const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "claude-state-"));
+    const stdout = execFileSync(process.execPath, [companion, command, prompt, "--json"], {
+      env: { ...process.env, PATH: `${fake.dir}:${process.env.PATH}`, CLAUDE_COMPANION_STATE_ROOT: stateRoot },
+      cwd: stateRoot,
+      encoding: "utf8"
+    });
+    assert.equal(JSON.parse(stdout).status, "completed", command);
+    const invocation = JSON.parse(fs.readFileSync(invocationLog, "utf8"));
+    assert.equal(Buffer.from(invocation.stdinBase64, "base64").toString("utf8"), prompt, command);
+    assert.equal(invocation.args.includes(prompt), false, command);
+    assert.deepEqual(
+      invocation.args.slice(invocation.args.indexOf("-p"), invocation.args.indexOf("-p") + 2),
+      ["-p", "--output-format"],
+      command
+    );
+  }
 });
 
 test("review returns validated JSON and stores result", () => {
@@ -119,13 +171,57 @@ console.error("unsupported"); process.exit(2);
   assert.equal(JSON.parse(result).job.id, payload.jobId);
 });
 
+test("adversarial review and invalid-result retry keep both generated prompts on stdin", () => {
+  const invocationLog = path.join(os.tmpdir(), `fake-review-retry-${Date.now()}.jsonl`);
+  const fake = makeFakeClaude(`
+const fs = require("node:fs");
+const args = process.argv.slice(2);
+if (!args.includes("-p")) process.exit(2);
+const stdin = fs.readFileSync(0);
+const prior = fs.existsSync(${JSON.stringify(invocationLog)})
+  ? fs.readFileSync(${JSON.stringify(invocationLog)}, "utf8").trim().split(/\\r?\\n/).filter(Boolean).length
+  : 0;
+fs.appendFileSync(${JSON.stringify(invocationLog)}, JSON.stringify({ args, stdinBase64: stdin.toString("base64") }) + "\\n");
+if (prior === 0) console.log("not valid review JSON");
+else console.log(JSON.stringify({findings:[]}));
+process.exit(0);
+`);
+  const repo = initRepo("claude-adversarial-retry-");
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "claude-state-"));
+  const focus = "focus-marker-a61c";
+  const stdout = execFileSync(process.execPath, [companion, "adversarial-review", focus, "--json"], {
+    env: { ...process.env, PATH: `${fake.dir}:${process.env.PATH}`, CLAUDE_COMPANION_STATE_ROOT: stateRoot },
+    cwd: repo,
+    encoding: "utf8"
+  });
+  assert.equal(JSON.parse(stdout).status, "completed");
+  const invocations = fs.readFileSync(invocationLog, "utf8").trim().split(/\r?\n/).map(JSON.parse);
+  assert.equal(invocations.length, 2);
+  const firstPrompt = buildReviewPrompt({
+    kind: "adversarial-review",
+    targetLabel: "working tree",
+    gitContext: "",
+    focus
+  });
+  const firstDelivered = Buffer.from(invocations[0].stdinBase64, "base64").toString("utf8");
+  const retryDelivered = Buffer.from(invocations[1].stdinBase64, "base64").toString("utf8");
+  assert.equal(firstDelivered, firstPrompt);
+  assert.equal(retryDelivered.startsWith(`${firstPrompt}\n\nYour previous response was invalid:`), true);
+  assert.match(retryDelivered, /Return JSON only\.$/);
+  for (const invocation of invocations) {
+    assert.equal(invocation.args.includes(firstDelivered), false);
+    assert.equal(invocation.args.includes(retryDelivered), false);
+    assert.equal(invocation.args.some((arg) => arg.includes(focus)), false);
+  }
+});
+
 test("review base range includes the patch in the Claude prompt", () => {
   const promptLog = path.join(os.tmpdir(), `fake-review-base-${Date.now()}.log`);
   const fake = makeFakeClaude(`
 const fs = require("node:fs");
 const args = process.argv.slice(2);
 if (args.includes("-p")) {
-  fs.writeFileSync(${JSON.stringify(promptLog)}, args[args.indexOf("-p") + 1]);
+  fs.writeFileSync(${JSON.stringify(promptLog)}, fs.readFileSync(0));
   console.log(JSON.stringify({findings:[]}));
   process.exit(0);
 }
@@ -159,7 +255,7 @@ test("working-tree review includes staged patch content", () => {
 const fs = require("node:fs");
 const args = process.argv.slice(2);
 if (args.includes("-p")) {
-  fs.writeFileSync(${JSON.stringify(promptLog)}, args[args.indexOf("-p") + 1]);
+  fs.writeFileSync(${JSON.stringify(promptLog)}, fs.readFileSync(0));
   console.log(JSON.stringify({findings:[]}));
   process.exit(0);
 }
@@ -418,17 +514,9 @@ console.error("unsupported"); process.exit(2);
   assert.equal(payload.output, "done");
 });
 
-test("foreground advise falls back to background on timeout", () => {
-  const nameLog = path.join(os.tmpdir(), `fake-name-${Date.now()}.log`);
+darwinTest("foreground advise falls back to supervised background on timeout", () => {
   const fake = makeFakeClaude(`
-const fs = require("node:fs");
 const args = process.argv.slice(2);
-if (args.includes("--bg")) {
-  fs.writeFileSync(${JSON.stringify(nameLog)},args[args.indexOf("--name")+1]);
-  console.log("backgrounded · bg123 (idle - send a prompt to start)");
-  process.exit(0);
-}
-if (args[0] === "agents") { console.log(JSON.stringify([{id:"bg123",sessionId:${JSON.stringify(TEST_RESUME_UUID)},name:fs.readFileSync(${JSON.stringify(nameLog)},"utf8"),status:"active",state:"working"}])); process.exit(0); }
 if (args.includes("-p")) {
   setTimeout(() => process.exit(0), 5000);
 } else {
@@ -454,6 +542,45 @@ if (args.includes("-p")) {
     encoding: "utf8"
   });
   assert.equal(JSON.parse(status).job.fallbackReason, "foreground-timeout");
+});
+
+nonDarwinTest("non-macOS foreground timeout never launches legacy or supervised background handling", () => {
+  const invocationLog = path.join(os.tmpdir(), `fake-non-darwin-timeout-${Date.now()}.jsonl`);
+  const fake = makeFakeClaude(`
+const fs = require("node:fs");
+const args = process.argv.slice(2);
+fs.appendFileSync(${JSON.stringify(invocationLog)}, JSON.stringify(args) + "\\n");
+if (args.includes("-p")) setTimeout(() => process.exit(0), 5000);
+else process.exit(2);
+`);
+  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "claude-state-"));
+  const result = spawnSync(
+    process.execPath,
+    [companion, "advise", "--timeout-ms", "50", "slow", "--json"],
+    {
+      env: { ...process.env, PATH: `${fake.dir}:${process.env.PATH}`, CLAUDE_COMPANION_STATE_ROOT: stateRoot },
+      cwd: stateRoot,
+      encoding: "utf8"
+    }
+  );
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /supervised background mode is unavailable on this platform/);
+  const invocations = fs.readFileSync(invocationLog, "utf8").trim().split(/\r?\n/).map(JSON.parse);
+  assert.equal(invocations.length, 1);
+  assert.ok(invocations[0].includes("-p"));
+  assert.equal(
+    invocations.some((args) => args.includes("--bg") || ["agents", "logs", "stop", "attach"].includes(args[0])),
+    false
+  );
+  const stateDir = resolveStateDir(fs.realpathSync(stateRoot), {
+    ...process.env,
+    CLAUDE_COMPANION_STATE_ROOT: stateRoot
+  }, stateRoot);
+  const state = JSON.parse(fs.readFileSync(path.join(stateDir, "state.json"), "utf8"));
+  assert.equal(state.jobs.length, 1);
+  assert.equal(state.jobs[0].status, "timed_out");
+  assert.equal(Object.hasOwn(state.jobs[0], "transport"), false);
+  assert.equal(Object.hasOwn(state.jobs[0], "supervisor"), false);
 });
 
 test("foreground advise can disable timeout background fallback", () => {
@@ -611,10 +738,10 @@ test("working-tree and base reviews fail closed when the diff exceeds one MiB", 
 });
 
 test("a distinctive marker near the diff limit reaches Claude completely", () => {
-  const promptLog = path.join(os.tmpdir(), `fake-large-prompt-${Date.now()}.txt`);
+  const invocationLog = path.join(os.tmpdir(), `fake-large-prompt-${Date.now()}.json`);
   const fake = makeFakeClaude(`
 const fs=require("node:fs");const args=process.argv.slice(2);
-if(args.includes("-p")){fs.writeFileSync(${JSON.stringify(promptLog)},args[args.indexOf("-p")+1]);console.log(JSON.stringify({findings:[]}));process.exit(0)}
+if(args.includes("-p")){const stdin=fs.readFileSync(0);fs.writeFileSync(${JSON.stringify(invocationLog)},JSON.stringify({args,stdinBase64:stdin.toString("base64")}));console.log(JSON.stringify({findings:[]}));process.exit(0)}
 process.exit(2);
 `);
   const repo = initRepo("claude-near-limit-");
@@ -624,26 +751,49 @@ process.exit(2);
   assert.ok(diffBytes >= 880 * 1024, `expected a near-limit diff, received ${diffBytes} bytes`);
   assert.ok(diffBytes < 1024 * 1024, `expected a below-limit diff, received ${diffBytes} bytes`);
   assert.ok(1024 * 1024 - diffBytes < 160 * 1024, `diff was not close enough to the limit: ${diffBytes} bytes`);
+  const gitContext = [
+    execFileSync("git", ["status", "--short", "--untracked-files=all"], { cwd: repo, encoding: "utf8" }),
+    execFileSync("git", ["diff", "HEAD", "--"], { cwd: repo, encoding: "utf8" })
+  ].join("\n").trim();
+  const expectedPrompt = buildReviewPrompt({ kind: "review", targetLabel: "working tree", gitContext });
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "claude-state-"));
   execFileSync(process.execPath, [companion, "review", "--json"], { env: { ...process.env, PATH: `${fake.dir}:${process.env.PATH}`, CLAUDE_COMPANION_STATE_ROOT: stateRoot }, cwd: repo, encoding: "utf8", maxBuffer: 2 * 1024 * 1024 });
-  assert.match(fs.readFileSync(promptLog, "utf8"), new RegExp(marker));
+  const invocation = JSON.parse(fs.readFileSync(invocationLog, "utf8"));
+  const deliveredPrompt = Buffer.from(invocation.stdinBase64, "base64").toString("utf8");
+  assert.equal(deliveredPrompt, expectedPrompt);
+  assert.match(deliveredPrompt, new RegExp(marker));
+  assert.equal(invocation.args.includes(expectedPrompt), false);
+  assert.equal(invocation.args.some((arg) => arg.includes(marker)), false);
 });
 
 test("monitor refuses unbounded, invalid and oversized bounds before polling", () => {
-  const nameLog = path.join(os.tmpdir(), `fake-bounds-name-${Date.now()}.log`);
-  const pollCount = path.join(os.tmpdir(), `fake-bounds-polls-${Date.now()}.txt`);
-  fs.writeFileSync(pollCount, "0", "utf8");
+  const providerLog = path.join(os.tmpdir(), `fake-bounds-provider-${Date.now()}.jsonl`);
   const fake = makeFakeClaude(`
 const fs=require("node:fs");const args=process.argv.slice(2);
-if(args.includes("--bg")){fs.writeFileSync(${JSON.stringify(nameLog)},args[args.indexOf("--name")+1]);console.log("backgrounded · bounds8");process.exit(0)}
-if(args[0]==="agents"){const n=Number(fs.readFileSync(${JSON.stringify(pollCount)},"utf8"))+1;fs.writeFileSync(${JSON.stringify(pollCount)},String(n));console.log(JSON.stringify([{id:"bounds8",sessionId:${JSON.stringify(TEST_RESUME_UUID)},name:fs.readFileSync(${JSON.stringify(nameLog)},"utf8"),status:"active",state:"working"}]));process.exit(0)}
-if(args[0]==="logs"){console.log("progress");process.exit(0)}
+fs.appendFileSync(${JSON.stringify(providerLog)},JSON.stringify(args)+"\\n");
 process.exit(2);
 `);
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "claude-monitor-bounds-"));
   const env = { ...process.env, PATH: `${fake.dir}:${process.env.PATH}`, CLAUDE_COMPANION_STATE_ROOT: stateRoot };
-  const launched = JSON.parse(execFileSync(process.execPath, [companion, "advise", "--background", "answer", "--json"], { env, cwd: stateRoot, encoding: "utf8" }));
-  const afterLaunch = fs.readFileSync(pollCount, "utf8");
+  const stateDir = resolveStateDir(fs.realpathSync(stateRoot), env, stateRoot);
+  saveState(stateDir, {
+    version: 1,
+    capabilities: null,
+    jobs: [{
+      id: "seeded-monitor-bounds-job",
+      recordVersion: SUPERVISED_RECORD_VERSION,
+      transport: SUPERVISED_TRANSPORT,
+      stateGeneration: 2,
+      lifecycleState: "running",
+      status: "running",
+      lifecycleId: "seeded-monitor-bounds-supervisor",
+      resultState: "unavailable",
+      cleanupStatus: "pending",
+      supervisor: { pid: process.pid, token: "not-authoritative-for-bounds-test" }
+    }]
+  }, { pathBoundary: stateRoot });
+  const stateFile = path.join(stateDir, "state.json");
+  const stateBefore = fs.readFileSync(stateFile, "utf8");
   const cases = [
     [["--forever"], /Unbounded --forever/],
     [["--max-checks", "0"], /integer between 1 and 1000/],
@@ -655,11 +805,12 @@ process.exit(2);
     [["--interval-ms", "invalid"], /between 0 and 3600000/]
   ];
   for (const [bounds, message] of cases) {
-    const refused = spawnSync(process.execPath, [companion, "monitor", launched.jobId, ...bounds, "--json"], { env, cwd: stateRoot, encoding: "utf8" });
+    const refused = spawnSync(process.execPath, [companion, "monitor", "seeded-monitor-bounds-job", ...bounds, "--json"], { env, cwd: stateRoot, encoding: "utf8" });
     assert.notEqual(refused.status, 0, bounds.join(" "));
     assert.match(refused.stderr, message, bounds.join(" "));
   }
-  assert.equal(fs.readFileSync(pollCount, "utf8"), afterLaunch);
+  assert.equal(fs.existsSync(providerLog), false);
+  assert.equal(fs.readFileSync(stateFile, "utf8"), stateBefore);
 });
 
 test("Git execution and invalid-base errors fail before Claude review", () => {

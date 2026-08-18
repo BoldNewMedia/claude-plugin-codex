@@ -126,7 +126,9 @@ test("buildClaudeArgs enforces read-only review tool restrictions", () => {
     write: false
   });
 
-  assert.deepEqual(args.slice(0, 2), ["-p", "review this"]);
+  assert.equal(args[0], "-p");
+  assert.equal(args.includes("review this"), false);
+  assert.deepEqual(args.slice(0, 3), ["-p", "--output-format", "json"]);
   assert.ok(args.includes("--tools"));
   assert.ok(args.includes(""));
   assert.ok(args.includes("--output-format"));
