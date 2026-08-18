@@ -2,6 +2,20 @@
 
 All notable public changes to Claude Code Advisor for Codex are recorded here.
 
+## 0.1.15 - 2026-08-18
+
+- replace provider-managed background and terminal-log result handling with a
+  plugin-owned supervised `claude -p --output-format json` lifecycle on macOS
+- accept only one bounded, valid UTF-8 provider result and enforce canonical
+  session continuity for foreground and background resume
+- transport prompts over standard input and keep prompts, raw output and
+  process details out of persisted job state
+- reject invalid monitor bounds before workspace or state access
+- terminate owned process groups and remove control resources after worker
+  exit, IPC loss, cancellation, timeout or output-limit failure
+- preserve ambiguous legacy jobs and unsupported platforms as visible,
+  fail-closed states instead of recovering authority from terminal logs
+
 ## 0.1.14 - 2026-08-18
 
 - clarify the community-maintained product name and non-affiliation statement
