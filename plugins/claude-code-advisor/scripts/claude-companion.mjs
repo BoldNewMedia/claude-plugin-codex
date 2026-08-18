@@ -620,12 +620,13 @@ async function runForeground(ctx, kind, prompt, options = {}) {
     throw new Error("No safe Claude job is available to resume. Pass an exact --job-id or start fresh.");
   }
   const resumeSessionId = resume ? resolveJobResumeReference(ctx, resume, options) : null;
+  const providerOutputFormat = resumeSessionId ? "json" : (options.outputFormat || "text");
   const job = createJob(ctx, kind, { write: options.write, summary: `${kind} task` });
   insertJob(ctx, job);
   const args = buildClaudeArgs({
     mode: kind,
     prompt,
-    outputFormat: options.outputFormat || "text",
+    outputFormat: providerOutputFormat,
     maxTurns: Number(options.maxTurns || DEFAULT_TASK_MAX_TURNS),
     write: Boolean(options.write),
     resumeSessionId,
@@ -669,7 +670,7 @@ async function runForeground(ctx, kind, prompt, options = {}) {
   const status = result.status === 0 ? "completed" : "failed";
   const failedForMaxTurns = result.status !== 0 && isMaxTurnLimitOutput(`${result.stdout}\n${result.stderr}`);
   let validatedResume = null;
-  if (result.status === 0 && resumeSessionId && options.outputFormat === "json") {
+  if (result.status === 0 && resumeSessionId) {
     try {
       validatedResume = validateSupervisedClaudeResult(Buffer.from(result.stdout, "utf8"), resumeSessionId);
     } catch {
@@ -684,14 +685,17 @@ async function runForeground(ctx, kind, prompt, options = {}) {
   const completed = completeJob(ctx, job, {
     status,
     resumeSessionId: validatedResume?.sessionId || resumeSessionId,
+    canonicalSessionId: validatedResume?.sessionId,
     resultSource: validatedResume ? "provider-json" : undefined,
+    resultState: validatedResume ? "available" : undefined,
+    resultAuthoritativeAt: validatedResume ? new Date().toISOString() : undefined,
     failureDiagnostic: result.status === 0
       ? null
       : failedForMaxTurns
         ? "Claude hit the max-turn limit."
         : `Claude command returned non-zero status ${result.status}.`,
     result: result.status === 0
-      ? result.stdout.trim()
+      ? validatedResume?.result ?? result.stdout.trim()
       : failedForMaxTurns
         ? "Claude hit the max-turn limit. Rerun with `--max-turns <higher>` or narrow the task."
         : `Claude command failed with status ${result.status}.`
@@ -1129,22 +1133,30 @@ async function reconcileSupervisedJob(ctx, job) {
 
 async function handleMonitor(argv) {
   const { options, positionals } = parseArgs(argv);
+  const { intervalMs, maxChecks } = validateMonitorBounds(options);
   const ctx = currentContext(options);
   let job = findJob(ctx, positionals[0]);
-  if (!job) {
-    throw new Error("No Claude job found.");
-  }
+  if (!job) throw new Error("No Claude job found.");
+  await monitorManagedJob(ctx, job, options, intervalMs, maxChecks);
+}
+
+function validateMonitorBounds(options) {
   if (options.forever) {
     throw new Error("Unbounded --forever monitoring is not supported. Use a finite --max-checks value.");
   }
-  const intervalMs = Number(options["interval-ms"] || DEFAULT_MONITOR_INTERVAL_MS);
-  const maxChecks = Number(options["max-checks"] || DEFAULT_MONITOR_CHECKS);
+  const intervalMs = Number(options["interval-ms"] ?? DEFAULT_MONITOR_INTERVAL_MS);
+  const maxChecks = Number(options["max-checks"] ?? DEFAULT_MONITOR_CHECKS);
   if (!Number.isFinite(intervalMs) || intervalMs < 0 || intervalMs > MAX_MONITOR_INTERVAL_MS) {
     throw new Error(`--interval-ms must be between 0 and ${MAX_MONITOR_INTERVAL_MS}.`);
   }
   if (!Number.isInteger(maxChecks) || maxChecks < 1 || maxChecks > MAX_MONITOR_CHECKS) {
     throw new Error(`--max-checks must be an integer between 1 and ${MAX_MONITOR_CHECKS}.`);
   }
+  return { intervalMs, maxChecks };
+}
+
+async function monitorManagedJob(ctx, initialJob, options, intervalMs, maxChecks) {
+  let job = initialJob;
   if (isSupervisedJob(job)) {
     for (let index = 0; index < maxChecks; index += 1) {
       job = await reconcileSupervisedJob(ctx, job);
@@ -1183,13 +1195,13 @@ async function handleMonitor(argv) {
 
 async function handleStatus(argv) {
   const { options, positionals } = parseArgs(argv);
-  const ctx = currentContext(options);
-  const reference = positionals[0];
-  const job = findJob(ctx, reference);
   if (options.watch || options.follow) {
     await handleMonitor(argv);
     return;
   }
+  const ctx = currentContext(options);
+  const reference = positionals[0];
+  const job = findJob(ctx, reference);
   if (reference && !job) {
     throw new Error("No Claude job found for that lifecycle reference. Use the exact managed job ID or lifecycle ID.");
   }

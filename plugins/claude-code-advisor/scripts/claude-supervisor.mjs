@@ -16,6 +16,8 @@ import {
 const CONFIG_LIMIT_BYTES = 2 * 1024 * 1024;
 const CONTROL_LIMIT_BYTES = 4096;
 const GROUP_VERIFY_MS = 1000;
+const GROUP_TERM_GRACE_MS = 500;
+const CONTROL_CLOSE_MS = 1000;
 const PROVIDER_START_TIMEOUT_MS = 5000;
 const groupWorkerScript = fileURLToPath(new URL("./claude-group-worker.mjs", import.meta.url));
 
@@ -75,25 +77,49 @@ async function waitForGroupGone(pgid, timeoutMs) {
   return !groupExists(pgid);
 }
 
-async function terminateOwnedGroup(worker, closePromise) {
-  if (!worker || worker.exitCode !== null || worker.signalCode !== null || !worker.connected) return false;
-  const requested = await new Promise((resolve) => {
-    worker.send({ type: "terminate" }, (error) => resolve(!error));
-  });
-  if (!requested) return false;
-  const closed = await Promise.race([
-    closePromise.then(() => true),
-    delay(2000).then(() => false)
-  ]);
-  if (!closed) return false;
-  return waitForGroupGone(worker.pid, GROUP_VERIFY_MS);
+function signalOwnedGroup(pgid, signal) {
+  try {
+    process.kill(-pgid, signal);
+    return true;
+  } catch (error) {
+    if (error?.code === "ESRCH") return true;
+    return false;
+  }
 }
 
-function createPrivateControlDirectory(directory) {
+async function terminateOwnedGroup(worker, closePromise, exitPromise, ownedPgid) {
+  if (!Number.isInteger(ownedPgid) || ownedPgid <= 0) return false;
+  await Promise.race([exitPromise, delay(20)]);
+  if (!groupExists(ownedPgid)) return true;
+
+  if (worker && worker.exitCode === null && worker.signalCode === null && worker.connected) {
+    const requested = await new Promise((resolve) => {
+      const timer = setTimeout(() => resolve(false), GROUP_TERM_GRACE_MS);
+      worker.send({ type: "terminate" }, (error) => {
+        clearTimeout(timer);
+        resolve(!error);
+      });
+    });
+    if (requested) {
+      await Promise.race([closePromise, delay(2000)]);
+      if (await waitForGroupGone(ownedPgid, GROUP_VERIFY_MS)) return true;
+    }
+  }
+
+  if (!groupExists(ownedPgid)) return true;
+  if (!signalOwnedGroup(ownedPgid, "SIGTERM")) return false;
+  if (await waitForGroupGone(ownedPgid, GROUP_TERM_GRACE_MS)) return true;
+  if (!signalOwnedGroup(ownedPgid, "SIGKILL")) return false;
+  await Promise.race([exitPromise, closePromise, delay(GROUP_VERIFY_MS)]);
+  return waitForGroupGone(ownedPgid, GROUP_VERIFY_MS);
+}
+
+function createPrivateControlDirectory(directory, markOwned) {
   fs.mkdirSync(directory, { mode: 0o700 });
   const stat = fs.lstatSync(directory);
   if (stat.isSymbolicLink() || !stat.isDirectory()) throw new Error("control-resource-failure");
   if (typeof process.getuid === "function" && stat.uid !== process.getuid()) throw new Error("control-resource-failure");
+  markOwned();
   fs.chmodSync(directory, 0o700);
 }
 
@@ -115,9 +141,12 @@ async function main() {
   }
 
   const control = supervisorPaths(config.stateDir, config.jobId);
-  createPrivateControlDirectory(control.directory);
   let child = null;
+  let ownedPgid = null;
   let controlServer = null;
+  let controlDirectoryOwned = false;
+  const controlSockets = new Set();
+  let controlCleanupPromise = null;
   let cancellationRequested = false;
   let interruptionRequested = false;
   let failureClassification = null;
@@ -126,26 +155,55 @@ async function main() {
   let stderrBytes = 0;
   let stdoutChunks = [];
   let workerClosePromise = null;
+  let workerExitPromise = null;
   let terminationPromise = null;
+  let resolveInterruption;
+  const interruptionPromise = new Promise((resolve) => { resolveInterruption = resolve; });
+  let resolveTerminationRequest;
+  const terminationRequestPromise = new Promise((resolve) => { resolveTerminationRequest = resolve; });
 
-  const cleanControlResources = async () => {
-    let resourceCleanup = true;
-    try {
-      const listeningStat = fs.lstatSync(control.socket);
-      if (!listeningStat.isSocket()) throw new Error("control-resource-failure");
-      await new Promise((resolve) => controlServer.close(resolve));
-      try {
-        const remainingStat = fs.lstatSync(control.socket);
-        if (!remainingStat.isSocket()) throw new Error("control-resource-failure");
-        fs.unlinkSync(control.socket);
-      } catch (error) {
-        if (error?.code !== "ENOENT") throw error;
+  const cleanControlResources = () => {
+    if (controlCleanupPromise) return controlCleanupPromise;
+    controlCleanupPromise = (async () => {
+      let resourceCleanup = true;
+      for (const socket of controlSockets) socket.destroy();
+      controlSockets.clear();
+      if (controlServer?.listening) {
+        const closed = await Promise.race([
+          new Promise((resolve) => controlServer.close(() => resolve(true))),
+          delay(CONTROL_CLOSE_MS).then(() => false)
+        ]);
+        if (!closed) resourceCleanup = false;
       }
-      fs.rmdirSync(control.directory);
-    } catch {
-      resourceCleanup = false;
-    }
-    return resourceCleanup;
+      try {
+        const socketStat = fs.lstatSync(control.socket);
+        if (!socketStat.isSocket()) {
+          resourceCleanup = false;
+        } else {
+          fs.unlinkSync(control.socket);
+        }
+      } catch (error) {
+        if (error?.code !== "ENOENT") resourceCleanup = false;
+      }
+      if (controlDirectoryOwned) {
+        try {
+          const directoryStat = fs.lstatSync(control.directory);
+          const owned = typeof process.getuid !== "function" || directoryStat.uid === process.getuid();
+          if (directoryStat.isSymbolicLink() || !directoryStat.isDirectory() || !owned) {
+            resourceCleanup = false;
+          } else {
+            fs.rmdirSync(control.directory);
+          }
+        } catch (error) {
+          if (error?.code !== "ENOENT") resourceCleanup = false;
+        }
+      }
+      if (fs.existsSync(control.socket) || (controlDirectoryOwned && fs.existsSync(control.directory))) {
+        resourceCleanup = false;
+      }
+      return resourceCleanup;
+    })();
+    return controlCleanupPromise;
   };
 
   const stdoutLimit = Number(config.stdoutLimitBytes);
@@ -153,18 +211,41 @@ async function main() {
   const timeoutMs = Number(config.timeoutMs);
 
   const ensureGroupTermination = () => {
-    if (child && workerClosePromise && !terminationPromise) {
-      terminationPromise = terminateOwnedGroup(child, workerClosePromise);
+    if (ownedPgid && workerClosePromise && workerExitPromise && !terminationPromise) {
+      terminationPromise = terminateOwnedGroup(child, workerClosePromise, workerExitPromise, ownedPgid);
     }
     return terminationPromise;
   };
   const requestTermination = (classification, interrupted = false) => {
     if (!failureClassification) failureClassification = classification;
-    if (interrupted) interruptionRequested = true;
-    return ensureGroupTermination();
+    if (interrupted) {
+      interruptionRequested = true;
+      resolveInterruption({ kind: "supervisor-interruption" });
+    }
+    const requested = ensureGroupTermination();
+    resolveTerminationRequest({ kind: "termination-request", classification });
+    return requested;
   };
+  const persistCleanupStatus = (terminal, groupClean, resourceCleanup) => {
+    const cleanupStatus = groupClean && resourceCleanup ? "verified" : "failed";
+    if (!terminal?.job || !["completed", "cancelled", "failed", "interrupted"].includes(terminal.job.lifecycleState)) {
+      return false;
+    }
+    try {
+      updateSupervisedCleanup(config.stateDir, config.jobId, cleanupStatus, { pathBoundary: config.stateRoot });
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
+    process.once(signal, () => requestTermination("interrupted-supervisor", true));
+  }
 
   const handleControl = (socket) => {
+    controlSockets.add(socket);
+    socket.on("close", () => controlSockets.delete(socket));
+    socket.on("error", () => {});
     let bytes = 0;
     const chunks = [];
     socket.on("data", (chunk) => {
@@ -208,206 +289,265 @@ async function main() {
     });
   };
 
-  controlServer = net.createServer(handleControl);
-  await new Promise((resolve, reject) => {
-    controlServer.once("error", reject);
-    controlServer.listen(control.socket, () => {
-      controlServer.off("error", reject);
-      resolve();
+  try {
+    createPrivateControlDirectory(control.directory, () => { controlDirectoryOwned = true; });
+    controlServer = net.createServer(handleControl);
+    await new Promise((resolve, reject) => {
+      controlServer.once("error", reject);
+      controlServer.listen(control.socket, () => {
+        controlServer.off("error", reject);
+        resolve();
+      });
     });
-  });
+    controlServer.on("error", () => requestTermination("worker-failure"));
+    if (interruptionRequested) throw new Error("supervisor-interrupted");
 
-  child = spawn(process.execPath, [groupWorkerScript], {
-    cwd: config.cwd,
-    env: process.env,
-    detached: true,
-    shell: false,
-    stdio: ["pipe", "pipe", "pipe", "ipc"]
-  });
+    child = spawn(process.execPath, [groupWorkerScript], {
+      cwd: config.cwd,
+      env: process.env,
+      detached: true,
+      shell: false,
+      stdio: ["pipe", "pipe", "pipe", "ipc"]
+    });
+    ownedPgid = child.pid;
 
-  child.stdout.on("data", (chunk) => {
-    if (failureClassification) return;
-    stdoutBytes += chunk.length;
-    if (stdoutBytes > stdoutLimit) {
-      stdoutChunks = [];
-      requestTermination("output-limit");
+    child.stdout.on("data", (chunk) => {
+      if (failureClassification) return;
+      stdoutBytes += chunk.length;
+      if (stdoutBytes > stdoutLimit) {
+        stdoutChunks = [];
+        requestTermination("output-limit");
+        return;
+      }
+      stdoutChunks.push(Buffer.from(chunk));
+    });
+    child.stderr.on("data", (chunk) => {
+      stderrBytes += chunk.length;
+      if (stderrBytes > stderrLimit) requestTermination("output-limit");
+    });
+    child.once("error", () => requestTermination("spawn-failure"));
+
+    workerClosePromise = new Promise((resolve) => {
+      child.once("close", (code, signal) => {
+        resolve({ code, signal });
+      });
+    });
+    workerExitPromise = new Promise((resolve) => {
+      child.once("exit", (code, signal) => resolve({ code, signal }));
+    });
+    let resolveWorkerLoss;
+    let providerOutcomeDelivered = false;
+    const workerLossPromise = new Promise((resolve) => { resolveWorkerLoss = resolve; });
+    workerClosePromise.then((outcome) => {
+      if (!providerOutcomeDelivered) resolveWorkerLoss({ kind: "worker-exit", ...outcome });
+    });
+    child.once("disconnect", () => {
+      if (!providerOutcomeDelivered) resolveWorkerLoss({ kind: "ipc-disconnect" });
+    });
+    child.stdin.on("error", () => {
+      if (!providerOutcomeDelivered) resolveWorkerLoss({ kind: "worker-stdin-error" });
+    });
+    let resolveProviderReady;
+    let resolveProviderOutcome;
+    const providerReadyPromise = new Promise((resolve) => { resolveProviderReady = resolve; });
+    const providerOutcomePromise = new Promise((resolve) => { resolveProviderOutcome = resolve; });
+    child.on("message", (message) => {
+      if (message?.type === "provider-ready") resolveProviderReady({ ok: true });
+      if (message?.type === "provider-spawn-error") {
+        providerOutcomeDelivered = true;
+        resolveProviderOutcome({ kind: "spawn-error" });
+      }
+      if (message?.type === "provider-close") {
+        providerOutcomeDelivered = true;
+        resolveProviderOutcome({ kind: "close", code: message.code, signal: message.signal });
+      }
+    });
+    const spawnPromise = new Promise((resolve, reject) => {
+      child.once("spawn", resolve);
+      child.once("error", reject);
+    });
+
+    try {
+      await spawnPromise;
+    } catch {
+      const groupClean = ownedPgid
+        ? await (requestTermination("spawn-failure") || Promise.resolve(false))
+        : true;
+      const terminal = transition(config, {
+        expectedStates: ["starting", "cancelling"],
+        toState: cancellationRequested ? "cancelled" : "failed",
+        patch: {
+          failureClassification: cancellationRequested ? "cancellation" : "spawn-failure",
+          cleanupStatus: groupClean ? "pending" : "failed",
+          terminalAt: new Date().toISOString()
+        }
+      });
+      const resourceCleanup = await cleanControlResources();
+      const cleanupPersisted = persistCleanupStatus(terminal, groupClean, resourceCleanup);
+      process.send?.({ type: "failed", classification: cancellationRequested ? "cancellation" : "spawn-failure" });
+      process.disconnect?.();
+      if (!groupClean || !resourceCleanup || !cleanupPersisted) process.exitCode = 1;
       return;
     }
-    stdoutChunks.push(Buffer.from(chunk));
-  });
-  child.stderr.on("data", (chunk) => {
-    stderrBytes += chunk.length;
-    if (stderrBytes > stderrLimit) requestTermination("output-limit");
-  });
-  child.once("error", () => requestTermination("spawn-failure"));
-
-  workerClosePromise = new Promise((resolve) => {
-    child.once("close", (code, signal) => {
-      resolve({ code, signal });
-    });
-  });
-  let resolveProviderReady;
-  let resolveProviderOutcome;
-  const providerReadyPromise = new Promise((resolve) => { resolveProviderReady = resolve; });
-  const providerOutcomePromise = new Promise((resolve) => { resolveProviderOutcome = resolve; });
-  child.on("message", (message) => {
-    if (message?.type === "provider-ready") resolveProviderReady({ ok: true });
-    if (message?.type === "provider-spawn-error") resolveProviderOutcome({ kind: "spawn-error" });
-    if (message?.type === "provider-close") {
-      resolveProviderOutcome({ kind: "close", code: message.code, signal: message.signal });
-    }
-  });
-  const spawnPromise = new Promise((resolve, reject) => {
-    child.once("spawn", resolve);
-    child.once("error", reject);
-  });
-
-  try {
-    await spawnPromise;
-  } catch {
-    const terminal = transition(config, {
-      expectedStates: ["starting", "cancelling"],
-      toState: cancellationRequested ? "cancelled" : "failed",
-      patch: {
-        failureClassification: cancellationRequested ? "cancellation" : "spawn-failure",
-        cleanupStatus: "pending",
-        terminalAt: new Date().toISOString()
+    child.stdin.end(JSON.stringify({ claudeArgs: config.claudeArgs, prompt: config.prompt, cwd: config.cwd }));
+    const providerStart = await Promise.race([
+      providerReadyPromise,
+      providerOutcomePromise,
+      workerLossPromise,
+      interruptionPromise,
+      terminationRequestPromise,
+      delay(PROVIDER_START_TIMEOUT_MS).then(() => ({ kind: "start-timeout" }))
+    ]);
+    if (providerStart?.ok !== true) {
+      if (!failureClassification) {
+        failureClassification = providerStart?.kind === "spawn-error"
+          ? "spawn-failure"
+          : providerStart?.kind === "supervisor-interruption"
+            ? "interrupted-supervisor"
+            : "worker-failure";
       }
+      if (providerStart?.kind === "supervisor-interruption") interruptionRequested = true;
+      const groupClean = await (requestTermination(failureClassification) || Promise.resolve(false));
+      const lifecycleState = cancellationRequested
+        ? groupClean ? "cancelled" : "failed"
+        : interruptionRequested ? "interrupted" : "failed";
+      const classification = cancellationRequested
+        ? groupClean ? "cancellation" : "cleanup-failure"
+        : failureClassification;
+      const terminal = transition(config, {
+        expectedStates: ["starting", "cancelling"],
+        toState: lifecycleState,
+        patch: {
+          failureClassification: classification,
+          cleanupStatus: groupClean ? "pending" : "failed",
+          terminalAt: new Date().toISOString()
+        }
+      });
+      const resourceCleanup = await cleanControlResources();
+      const cleanupPersisted = persistCleanupStatus(terminal, groupClean, resourceCleanup);
+      process.send?.({ type: "failed", classification: failureClassification });
+      process.disconnect?.();
+      if (!groupClean || !resourceCleanup || !cleanupPersisted) process.exitCode = 1;
+      return;
+    }
+    if (cancellationRequested) requestTermination("cancellation");
+    const running = transition(config, {
+      expectedStates: ["starting"],
+      toState: "running",
+      patch: {
+        runningAt: new Date().toISOString(),
+        launchAcknowledgedAt: new Date().toISOString(),
+        supervisor: { pid: process.pid, token: config.token }
+      }
+    });
+    if (!running.applied && running.job?.lifecycleState !== "cancelling") {
+      requestTermination("interrupted-supervisor", true);
+    }
+
+    process.send?.({ type: "ready" });
+    process.disconnect?.();
+
+    const timeout = setTimeout(() => requestTermination("timeout"), timeoutMs);
+    timeout.unref();
+
+    const completion = await Promise.race([
+      providerOutcomePromise.then((outcome) => ({ source: "provider", outcome })),
+      workerLossPromise.then((outcome) => ({ source: "worker", outcome })),
+      interruptionPromise.then((outcome) => ({ source: "interruption", outcome })),
+      terminationRequestPromise.then((outcome) => ({ source: "termination", outcome }))
+    ]);
+    clearTimeout(timeout);
+    if (finalising) return;
+    finalising = true;
+
+    let outcome = completion.outcome;
+    let groupClean;
+    if (completion.source === "provider") {
+      if (outcome.kind === "spawn-error" && !failureClassification) failureClassification = "spawn-failure";
+      groupClean = await (ensureGroupTermination() || Promise.resolve(false));
+    } else {
+      if (!failureClassification) failureClassification = completion.source === "worker"
+        ? "worker-failure"
+        : "interrupted-supervisor";
+      if (completion.source === "interruption") interruptionRequested = true;
+      groupClean = await (ensureGroupTermination() || Promise.resolve(false));
+      outcome = { code: null, signal: completion.outcome.signal };
+    }
+    let lifecycleState;
+    let terminalPatch = {
+      cleanupStatus: groupClean ? "pending" : "failed",
+      terminalAt: new Date().toISOString()
+    };
+    if (cancellationRequested) {
+      lifecycleState = groupClean ? "cancelled" : "failed";
+      terminalPatch.failureClassification = groupClean ? "cancellation" : "cleanup-failure";
+    } else if (interruptionRequested) {
+      lifecycleState = "interrupted";
+      terminalPatch.failureClassification = "interrupted-supervisor";
+    } else if (failureClassification) {
+      lifecycleState = "failed";
+      terminalPatch.failureClassification = failureClassification;
+    } else if (outcome.signal) {
+      lifecycleState = "failed";
+      terminalPatch.failureClassification = "signal-termination";
+    } else if (outcome.code !== 0) {
+      lifecycleState = "failed";
+      terminalPatch.failureClassification = "non-zero-exit";
+    } else {
+      try {
+        const validated = validateSupervisedClaudeResult(Buffer.concat(stdoutChunks), config.expectedSessionId || null);
+        lifecycleState = "completed";
+        terminalPatch = {
+          ...terminalPatch,
+          canonicalSessionId: validated.sessionId,
+          resumeSessionId: validated.sessionId,
+          result: validated.result,
+          resultAuthoritativeAt: new Date().toISOString(),
+          resultSource: "provider-json",
+          resultState: "available"
+        };
+      } catch {
+        lifecycleState = "failed";
+        terminalPatch.failureClassification = "invalid-result";
+      }
+    }
+
+    const terminal = transition(config, {
+      expectedStates: ["starting", "running", "cancelling"],
+      toState: lifecycleState,
+      patch: terminalPatch
     });
     const resourceCleanup = await cleanControlResources();
-    if (terminal.applied) {
-      updateSupervisedCleanup(config.stateDir, config.jobId, resourceCleanup ? "verified" : "failed", {
-        pathBoundary: config.stateRoot
-      });
-    }
-    process.send?.({ type: "failed", classification: cancellationRequested ? "cancellation" : "spawn-failure" });
-    process.disconnect?.();
-    if (!resourceCleanup) process.exitCode = 1;
-    return;
-  }
-  child.stdin.end(JSON.stringify({ claudeArgs: config.claudeArgs, prompt: config.prompt, cwd: config.cwd }));
-  const providerStart = await Promise.race([
-    providerReadyPromise,
-    providerOutcomePromise,
-    delay(PROVIDER_START_TIMEOUT_MS).then(() => ({ kind: "start-timeout" }))
-  ]);
-  if (providerStart?.ok !== true) {
-    failureClassification = providerStart?.kind === "spawn-error" ? "spawn-failure" : "worker-failure";
-    const groupClean = await (requestTermination(failureClassification) || Promise.resolve(false));
-    const terminal = transition(config, {
-      expectedStates: ["starting", "cancelling"],
-      toState: "failed",
-      patch: {
-        failureClassification,
-        cleanupStatus: groupClean ? "pending" : "failed",
-        terminalAt: new Date().toISOString()
-      }
-    });
-    if (terminal.applied && groupClean) {
-      const resourceCleanup = await cleanControlResources();
-      updateSupervisedCleanup(config.stateDir, config.jobId, resourceCleanup ? "verified" : "failed", {
-        pathBoundary: config.stateRoot
-      });
-    }
-    process.send?.({ type: "failed", classification: failureClassification });
-    process.disconnect?.();
-    return;
-  }
-  if (cancellationRequested) requestTermination("cancellation");
-  const running = transition(config, {
-    expectedStates: ["starting"],
-    toState: "running",
-    patch: {
-      runningAt: new Date().toISOString(),
-      launchAcknowledgedAt: new Date().toISOString(),
-      supervisor: { pid: process.pid, token: config.token }
-    }
-  });
-  if (!running.applied && running.job?.lifecycleState !== "cancelling") {
-    requestTermination("interrupted-supervisor", true);
-  }
+    const cleanupPersisted = persistCleanupStatus(terminal, groupClean, resourceCleanup);
+    if (!groupClean || !resourceCleanup || !cleanupPersisted) process.exitCode = 1;
 
-  process.send?.({ type: "ready" });
-  process.disconnect?.();
-
-  const timeout = setTimeout(() => requestTermination("timeout"), timeoutMs);
-  timeout.unref();
-  for (const signal of ["SIGINT", "SIGTERM", "SIGHUP"]) {
-    process.once(signal, () => requestTermination("interrupted-supervisor", true));
-  }
-
-  const completion = await Promise.race([
-    providerOutcomePromise.then((outcome) => ({ source: "provider", outcome })),
-    workerClosePromise.then((outcome) => ({ source: "worker", outcome }))
-  ]);
-  clearTimeout(timeout);
-  if (finalising) return;
-  finalising = true;
-
-  let outcome = completion.outcome;
-  let groupClean;
-  if (completion.source === "provider") {
-    if (outcome.kind === "spawn-error" && !failureClassification) failureClassification = "spawn-failure";
-    groupClean = await (ensureGroupTermination() || Promise.resolve(false));
-  } else {
-    if (!failureClassification) {
-      failureClassification = "interrupted-supervisor";
-      interruptionRequested = true;
-    }
-    groupClean = terminationPromise ? await terminationPromise : false;
-    outcome = { code: null, signal: completion.outcome.signal };
-  }
-  let lifecycleState;
-  let terminalPatch = {
-    cleanupStatus: groupClean ? "pending" : "failed",
-    terminalAt: new Date().toISOString()
-  };
-  if (cancellationRequested) {
-    lifecycleState = groupClean ? "cancelled" : "failed";
-    terminalPatch.failureClassification = groupClean ? "cancellation" : "cleanup-failure";
-  } else if (interruptionRequested) {
-    lifecycleState = "interrupted";
-    terminalPatch.failureClassification = "interrupted-supervisor";
-  } else if (failureClassification) {
-    lifecycleState = "failed";
-    terminalPatch.failureClassification = failureClassification;
-  } else if (outcome.signal) {
-    lifecycleState = "failed";
-    terminalPatch.failureClassification = "signal-termination";
-  } else if (outcome.code !== 0) {
-    lifecycleState = "failed";
-    terminalPatch.failureClassification = "non-zero-exit";
-  } else {
+  } catch {
+    const classification = interruptionRequested
+      ? "interrupted-supervisor"
+      : failureClassification || "worker-failure";
+    const groupClean = ownedPgid && workerClosePromise
+      ? await (requestTermination(classification, interruptionRequested) || Promise.resolve(false))
+      : !ownedPgid;
+    let terminal = null;
     try {
-      const validated = validateSupervisedClaudeResult(Buffer.concat(stdoutChunks), config.expectedSessionId || null);
-      lifecycleState = "completed";
-      terminalPatch = {
-        ...terminalPatch,
-        canonicalSessionId: validated.sessionId,
-        resumeSessionId: validated.sessionId,
-        result: validated.result,
-        resultAuthoritativeAt: new Date().toISOString(),
-        resultSource: "provider-json",
-        resultState: "available"
-      };
+      terminal = transition(config, {
+        expectedStates: ["starting", "running", "cancelling"],
+        toState: interruptionRequested ? "interrupted" : "failed",
+        patch: {
+          failureClassification: classification,
+          cleanupStatus: groupClean ? "pending" : "failed",
+          terminalAt: new Date().toISOString()
+        }
+      });
     } catch {
-      lifecycleState = "failed";
-      terminalPatch.failureClassification = "invalid-result";
+      terminal = null;
     }
+    const resourceCleanup = await cleanControlResources();
+    const cleanupPersisted = persistCleanupStatus(terminal, groupClean, resourceCleanup);
+    process.send?.({ type: "failed", classification });
+    process.disconnect?.();
+    if (!groupClean || !resourceCleanup || !cleanupPersisted) process.exitCode = 1;
   }
-
-  const terminal = transition(config, {
-    expectedStates: ["starting", "running", "cancelling"],
-    toState: lifecycleState,
-    patch: terminalPatch
-  });
-  if (!terminal.applied || !groupClean) return;
-
-  const resourceCleanup = await cleanControlResources();
-  updateSupervisedCleanup(config.stateDir, config.jobId, resourceCleanup ? "verified" : "failed", {
-    pathBoundary: config.stateRoot
-  });
-  if (!resourceCleanup) process.exitCode = 1;
 }
 
 main().catch(() => {

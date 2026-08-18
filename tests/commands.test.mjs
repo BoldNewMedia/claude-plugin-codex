@@ -766,51 +766,73 @@ process.exit(2);
   assert.equal(invocation.args.some((arg) => arg.includes(marker)), false);
 });
 
-test("monitor refuses unbounded, invalid and oversized bounds before polling", () => {
+test("monitor bounds fail before workspace, state, job or provider interaction", () => {
   const providerLog = path.join(os.tmpdir(), `fake-bounds-provider-${Date.now()}.jsonl`);
   const fake = makeFakeClaude(`
 const fs=require("node:fs");const args=process.argv.slice(2);
 fs.appendFileSync(${JSON.stringify(providerLog)},JSON.stringify(args)+"\\n");
 process.exit(2);
 `);
-  const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "claude-monitor-bounds-"));
-  const env = { ...process.env, PATH: `${fake.dir}:${process.env.PATH}`, CLAUDE_COMPANION_STATE_ROOT: stateRoot };
-  const stateDir = resolveStateDir(fs.realpathSync(stateRoot), env, stateRoot);
-  saveState(stateDir, {
-    version: 1,
-    capabilities: null,
-    jobs: [{
-      id: "seeded-monitor-bounds-job",
-      recordVersion: SUPERVISED_RECORD_VERSION,
-      transport: SUPERVISED_TRANSPORT,
-      stateGeneration: 2,
-      lifecycleState: "running",
-      status: "running",
-      lifecycleId: "seeded-monitor-bounds-supervisor",
-      resultState: "unavailable",
-      cleanupStatus: "pending",
-      supervisor: { pid: process.pid, token: "not-authoritative-for-bounds-test" }
-    }]
-  }, { pathBoundary: stateRoot });
-  const stateFile = path.join(stateDir, "state.json");
-  const stateBefore = fs.readFileSync(stateFile, "utf8");
-  const cases = [
-    [["--forever"], /Unbounded --forever/],
-    [["--max-checks", "0"], /integer between 1 and 1000/],
-    [["--max-checks", "1001"], /integer between 1 and 1000/],
-    [["--max-checks", "1.5"], /integer between 1 and 1000/],
-    [["--max-checks", "invalid"], /integer between 1 and 1000/],
-    [["--interval-ms", "-1"], /between 0 and 3600000/],
-    [["--interval-ms", "3600001"], /between 0 and 3600000/],
-    [["--interval-ms", "invalid"], /between 0 and 3600000/]
-  ];
-  for (const [bounds, message] of cases) {
-    const refused = spawnSync(process.execPath, [companion, "monitor", "seeded-monitor-bounds-job", ...bounds, "--json"], { env, cwd: stateRoot, encoding: "utf8" });
-    assert.notEqual(refused.status, 0, bounds.join(" "));
-    assert.match(refused.stderr, message, bounds.join(" "));
+  const workspace = initRepo("claude-monitor-validation-");
+  const baseEnv = { ...process.env, PATH: `${fake.dir}:${process.env.PATH}` };
+  const run = (stateRoot, args) => spawnSync(process.execPath, [companion, ...args, "--json"], {
+    env: { ...baseEnv, CLAUDE_COMPANION_STATE_ROOT: stateRoot },
+    cwd: workspace,
+    encoding: "utf8"
+  });
+
+  const absentRoot = path.join(os.tmpdir(), `claude-monitor-absent-${process.pid}-${Date.now()}`);
+  const absent = run(absentRoot, ["monitor", "missing-job", "--forever"]);
+  assert.notEqual(absent.status, 0);
+  assert.match(absent.stderr, /Unbounded --forever/);
+  assert.equal(fs.existsSync(absentRoot), false);
+
+  const missingRoot = path.join(os.tmpdir(), `claude-monitor-missing-${process.pid}-${Date.now()}`);
+  const missing = run(missingRoot, ["status", "missing-job", "--watch", "--interval-ms", "-1"]);
+  assert.notEqual(missing.status, 0);
+  assert.match(missing.stderr, /--interval-ms must be between 0 and 3600000/);
+  assert.doesNotMatch(missing.stderr, /No Claude job found/);
+  assert.equal(fs.existsSync(missingRoot), false);
+
+  const malformedRoot = fs.mkdtempSync(path.join(os.tmpdir(), "claude-monitor-malformed-"));
+  fs.chmodSync(malformedRoot, 0o751);
+  const malformedEnv = { ...baseEnv, CLAUDE_COMPANION_STATE_ROOT: malformedRoot };
+  const malformedStateDir = resolveStateDir(fs.realpathSync(workspace), malformedEnv, malformedRoot);
+  fs.mkdirSync(malformedStateDir, { recursive: true, mode: 0o711 });
+  fs.chmodSync(malformedStateDir, 0o711);
+  const malformedFile = path.join(malformedStateDir, "state.json");
+  fs.writeFileSync(malformedFile, "{ definitely-not-json }\n", { mode: 0o640 });
+  const malformedBytes = fs.readFileSync(malformedFile);
+  const malformedBefore = {
+    root: fs.statSync(malformedRoot, { bigint: true }),
+    directory: fs.statSync(malformedStateDir, { bigint: true }),
+    file: fs.statSync(malformedFile, { bigint: true })
+  };
+  const malformed = run(malformedRoot, ["status", "missing-job", "--follow", "--max-checks", "0"]);
+  assert.notEqual(malformed.status, 0);
+  assert.match(malformed.stderr, /--max-checks must be an integer between 1 and 1000/);
+  assert.deepEqual(fs.readFileSync(malformedFile), malformedBytes);
+  for (const [name, target] of [["root", malformedRoot], ["directory", malformedStateDir], ["file", malformedFile]]) {
+    const after = fs.statSync(target, { bigint: true });
+    assert.equal(after.mode, malformedBefore[name].mode, `${name} mode changed`);
+    assert.equal(after.size, malformedBefore[name].size, `${name} size changed`);
+    assert.equal(after.mtimeNs, malformedBefore[name].mtimeNs, `${name} mtime changed`);
   }
+
+  const hostileRoot = path.join(os.tmpdir(), `claude-monitor-hostile-${process.pid}-${Date.now()}`);
+  fs.writeFileSync(hostileRoot, "hostile-state-root\n", { mode: 0o640 });
+  const hostileBytes = fs.readFileSync(hostileRoot);
+  const hostileBefore = fs.statSync(hostileRoot, { bigint: true });
+  const hostile = run(hostileRoot, ["monitor", "missing-job", "--interval-ms", "invalid"]);
+  assert.notEqual(hostile.status, 0);
+  assert.match(hostile.stderr, /--interval-ms must be between 0 and 3600000/);
+  assert.deepEqual(fs.readFileSync(hostileRoot), hostileBytes);
+  const hostileAfter = fs.statSync(hostileRoot, { bigint: true });
+  assert.equal(hostileAfter.mode, hostileBefore.mode);
+  assert.equal(hostileAfter.size, hostileBefore.size);
+  assert.equal(hostileAfter.mtimeNs, hostileBefore.mtimeNs);
+
   assert.equal(fs.existsSync(providerLog), false);
-  assert.equal(fs.readFileSync(stateFile, "utf8"), stateBefore);
 });
 
 test("Git execution and invalid-base errors fail before Claude review", () => {

@@ -8,6 +8,13 @@ const CONFIG_LIMIT_BYTES = 2 * 1024 * 1024;
 const TERMINATION_GRACE_MS = 500;
 let terminating = false;
 
+if (
+  process.env.CLAUDE_TEST_SCENARIO &&
+  process.env.CLAUDE_COMPANION_TEST_EXIT_GROUP_WORKER_BEFORE_CONFIG === "1"
+) {
+  process.exit(0);
+}
+
 process.on("SIGTERM", () => {
   // The group anchor must survive the graceful group signal long enough to
   // escalate against descendants that deliberately ignore it.

@@ -11,6 +11,7 @@ import {
   saveState,
   SUPERVISED_RECORD_VERSION,
   SUPERVISED_TRANSPORT,
+  supervisorPaths,
   transitionSupervisedJob,
   updateSupervisedCleanup,
   validateSupervisedClaudeResult
@@ -109,6 +110,51 @@ function processExists(pid) {
   } catch (error) {
     return error?.code !== "ESRCH";
   }
+}
+
+function processGroupExists(pgid) {
+  try {
+    process.kill(-pgid, 0);
+    return true;
+  } catch (error) {
+    return error?.code !== "ESRCH";
+  }
+}
+
+function processRelationships() {
+  return execFileSync("ps", ["-axo", "pid=,ppid=,pgid="], { encoding: "utf8" })
+    .trim()
+    .split(/\r?\n/)
+    .map((line) => line.trim().split(/\s+/).map(Number))
+    .filter((row) => row.length === 3 && row.every(Number.isInteger))
+    .map(([pid, ppid, pgid]) => ({ pid, ppid, pgid }));
+}
+
+function processStartIdentity(pid) {
+  try {
+    return execFileSync("ps", ["-p", String(pid), "-o", "lstart="], { encoding: "utf8" }).trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+function waitForProcessRelationship(predicate, timeoutMs = 5000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    const match = processRelationships().find(predicate);
+    if (match) return match;
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+  }
+  return null;
+}
+
+function waitForProcessCondition(predicate, timeoutMs = 10000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (predicate()) return true;
+    Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+  }
+  return predicate();
 }
 
 function waitForFile(file, timeoutMs = 5000) {
@@ -316,6 +362,173 @@ supervisedTest("cancellation terminates and reaps a TERM-ignoring child and gran
       if (fs.existsSync(file)) fs.unlinkSync(file);
     }
   }
+});
+
+supervisedTest("worker-first exit terminates its owned process group and cleans control resources", () => {
+  const gateFile = path.join(os.tmpdir(), `claude-supervisor-worker-first-${process.pid}-${Date.now()}`);
+  const startedFile = `${gateFile}.started`;
+  const harness = makeHarness({ gateFile, startedFile, ignoreTerm: true, gateTimeoutMs: 30000 });
+  let supervisorPid = null;
+  let workerPid = null;
+  let providerPid = null;
+  let ownedPgid = null;
+  let control = null;
+  const processIdentities = new Map();
+  try {
+    const launched = runCompanion(harness, ["advise", "--background", "check"]);
+    assert.equal(launched.status, 0, launched.stderr);
+    const payload = JSON.parse(launched.stdout);
+    assert.ok(waitForFile(startedFile));
+    const running = waitForJob(harness, payload.jobId, (job) => job.lifecycleState === "running");
+    supervisorPid = running.supervisor.pid;
+    processIdentities.set(supervisorPid, processStartIdentity(supervisorPid));
+    const worker = waitForProcessRelationship((entry) => entry.ppid === supervisorPid);
+    assert.ok(worker, "group worker did not become observable");
+    workerPid = worker.pid;
+    processIdentities.set(workerPid, processStartIdentity(workerPid));
+    ownedPgid = worker.pgid;
+    assert.equal(ownedPgid, workerPid);
+    const provider = waitForProcessRelationship((entry) => entry.ppid === workerPid && entry.pgid === ownedPgid);
+    assert.ok(provider, "fake provider did not join the worker-owned process group");
+    providerPid = provider.pid;
+    processIdentities.set(providerPid, processStartIdentity(providerPid));
+    assert.equal(processExists(providerPid), true);
+    control = supervisorPaths(path.dirname(findStateFile(harness.stateRoot)), payload.jobId);
+    assert.equal(fs.existsSync(control.directory), true);
+    assert.equal(fs.existsSync(control.socket), true);
+
+    process.kill(workerPid, "SIGKILL");
+    const terminal = waitForJob(
+      harness,
+      payload.jobId,
+      (job) => ["failed", "interrupted"].includes(job.lifecycleState) && job.cleanupStatus !== "pending",
+      12000
+    );
+    assert.equal(terminal.lifecycleState, "failed");
+    assert.equal(terminal.failureClassification, "worker-failure");
+    assert.equal(terminal.cleanupStatus, "verified");
+    assert.equal(Object.hasOwn(terminal, "result"), false);
+    assert.equal(Object.hasOwn(terminal, "resultAuthoritativeAt"), false);
+    assert.equal(waitForProcessCondition(() => !processGroupExists(ownedPgid)), true);
+    assert.equal(waitForProcessCondition(() => !processExists(providerPid)), true);
+    assert.equal(waitForProcessCondition(() => !processExists(workerPid)), true);
+    assert.equal(waitForProcessCondition(() => !processExists(supervisorPid)), true);
+    assert.equal(fs.existsSync(control.socket), false);
+    assert.equal(fs.existsSync(control.directory), false);
+
+    const stateFile = findStateFile(harness.stateRoot);
+    const immutableBytes = fs.readFileSync(stateFile);
+    const immutableJob = structuredClone(terminal);
+    const repeated = [
+      runCompanion(harness, ["status", payload.jobId]),
+      runCompanion(harness, ["monitor", payload.jobId, "--interval-ms", "0", "--max-checks", "1"]),
+      runCompanion(harness, ["result", payload.jobId]),
+      runCompanion(harness, ["cancel", payload.jobId])
+    ];
+    for (const call of repeated) {
+      assert.equal(call.signal, null);
+      assert.equal(call.status, 0, call.stderr);
+    }
+    const after = readJob(harness, payload.jobId);
+    assert.deepEqual(after, immutableJob);
+    assert.deepEqual(fs.readFileSync(stateFile), immutableBytes);
+  } finally {
+    for (const pid of [providerPid, workerPid, supervisorPid]) {
+      if (
+        Number.isInteger(pid) &&
+        processIdentities.get(pid) &&
+        processStartIdentity(pid) === processIdentities.get(pid)
+      ) {
+        try { process.kill(pid, "SIGKILL"); } catch {}
+      }
+    }
+    waitForProcessCondition(() => [providerPid, workerPid, supervisorPid].every((pid) => !Number.isInteger(pid) || !processExists(pid)), 2000);
+    if (control) {
+      try {
+        if (fs.lstatSync(control.socket).isSocket()) fs.unlinkSync(control.socket);
+      } catch (error) {
+        if (error?.code !== "ENOENT") throw error;
+      }
+      try {
+        if (fs.lstatSync(control.directory).isDirectory()) fs.rmdirSync(control.directory);
+      } catch (error) {
+        if (error?.code !== "ENOENT") throw error;
+      }
+    }
+    for (const file of [gateFile, startedFile]) {
+      if (fs.existsSync(file)) fs.unlinkSync(file);
+    }
+  }
+});
+
+supervisedTest("worker exit before config consumption cannot bypass cleanup through stdin EPIPE", async () => {
+  const harness = makeHarness();
+  const stateDir = resolveStateDir(fs.realpathSync(harness.repo), harness.env, harness.stateRoot);
+  const jobId = `worker-config-exit-${process.pid}-${Date.now()}`;
+  const token = "synthetic-worker-config-token";
+  saveState(stateDir, {
+    version: 1,
+    capabilities: null,
+    jobs: [{
+      id: jobId,
+      recordVersion: SUPERVISED_RECORD_VERSION,
+      transport: SUPERVISED_TRANSPORT,
+      stateGeneration: 1,
+      lifecycleState: "starting",
+      status: "starting",
+      lifecycleId: `supervisor-${jobId}`,
+      resultState: "unavailable",
+      cleanupStatus: "pending",
+      supervisor: { pid: null, token }
+    }]
+  }, { pathBoundary: harness.stateRoot });
+  const config = {
+    jobId,
+    token,
+    prompt: "x".repeat(1536 * 1024),
+    claudeArgs: ["-p", "--output-format", "json"],
+    cwd: harness.repo,
+    stateDir,
+    stateRoot: harness.stateRoot,
+    expectedSessionId: null,
+    timeoutMs: 10000,
+    stdoutLimitBytes: 1024 * 1024,
+    stderrLimitBytes: 64 * 1024
+  };
+  const child = spawn(process.execPath, [supervisor], {
+    cwd: harness.repo,
+    env: {
+      ...harness.env,
+      CLAUDE_COMPANION_TEST_EXIT_GROUP_WORKER_BEFORE_CONFIG: "1"
+    },
+    stdio: ["pipe", "ignore", "ignore", "ipc"]
+  });
+  const exited = new Promise((resolve) => child.once("exit", (code, signal) => resolve({ code, signal })));
+  child.stdin.on("error", () => {});
+  child.stdin.end(JSON.stringify(config));
+  let exitTimeout;
+  const timedOut = new Promise((resolve) => {
+    exitTimeout = setTimeout(() => resolve(null), 12000);
+    exitTimeout.unref();
+  });
+  const outcome = await Promise.race([
+    exited,
+    timedOut
+  ]);
+  clearTimeout(exitTimeout);
+  if (!outcome && processExists(child.pid)) process.kill(child.pid, "SIGKILL");
+  assert.ok(outcome, "supervisor did not exit after the worker rejected its config pipe");
+  assert.equal(outcome.signal, null);
+  const terminal = readJob(harness, jobId);
+  assert.equal(terminal.lifecycleState, "failed");
+  assert.equal(terminal.failureClassification, "worker-failure");
+  assert.equal(Object.hasOwn(terminal, "result"), false);
+  assert.equal(Object.hasOwn(terminal, "resultAuthoritativeAt"), false);
+  const control = supervisorPaths(stateDir, jobId);
+  assert.equal(fs.existsSync(control.socket), false);
+  assert.equal(fs.existsSync(control.directory), false);
+  assert.equal(terminal.cleanupStatus, "verified", JSON.stringify({ outcome, terminal }));
+  assert.equal(outcome.code, 0, JSON.stringify(terminal));
 });
 
 supervisedTest("cancellation during streamed output discards partial stdout", () => {
@@ -544,13 +757,12 @@ supervisedTest("foreground and supervised asynchronous resume preserve the valid
   const initialLaunch = JSON.parse(runCompanion(harness, ["advise", "--background", "first"]).stdout);
   waitForJob(harness, initialLaunch.jobId, (job) => job.lifecycleState === "completed");
   const foreground = runCompanion(harness, [
-    "rescue", "--resume", "--job-id", initialLaunch.jobId, "--output-format", "json", "second"
+    "rescue", "--resume", "--job-id", initialLaunch.jobId, "second"
   ]);
   assert.equal(foreground.status, 0, foreground.stderr);
   const foregroundPayload = JSON.parse(foreground.stdout);
   assert.equal(foregroundPayload.status, "completed");
-  const foregroundEnvelope = JSON.parse(foregroundPayload.output);
-  assert.equal(foregroundEnvelope.session_id, SESSION_ID);
+  assert.equal(foregroundPayload.output, "PASS");
   const foregroundInvocation = readInvocations(harness).find((entry) =>
     entry.args.includes("--resume") &&
     Buffer.from(entry.stdinBase64, "base64").toString("utf8") === "second"
@@ -563,6 +775,13 @@ supervisedTest("foreground and supervised asynchronous resume preserve the valid
     ),
     ["--resume", SESSION_ID]
   );
+  assert.deepEqual(
+    foregroundInvocation.args.slice(
+      foregroundInvocation.args.indexOf("--output-format"),
+      foregroundInvocation.args.indexOf("--output-format") + 2
+    ),
+    ["--output-format", "json"]
+  );
   assert.equal(foregroundInvocation.args.includes("second"), false);
   const resumed = runCompanion(harness, [
     "rescue", "--background", "--resume", "--job-id", foregroundPayload.jobId, "third"
@@ -573,6 +792,46 @@ supervisedTest("foreground and supervised asynchronous resume preserve the valid
   assert.notEqual(resumedPayload.jobId, foregroundPayload.jobId);
   const resumedJob = waitForJob(harness, resumedPayload.jobId, (job) => job.lifecycleState === "completed");
   assert.equal(resumedJob.resumeSessionId, SESSION_ID);
+});
+
+supervisedTest("foreground resume rejects missing, malformed and mismatched provider identity", () => {
+  const cases = [
+    {
+      name: "missing",
+      stdout: JSON.stringify({ type: "result", subtype: "success", is_error: false, result: "missing" })
+    },
+    { name: "malformed", stdout: "{not-json" },
+    {
+      name: "mismatched",
+      stdout: JSON.stringify({
+        type: "result",
+        subtype: "success",
+        is_error: false,
+        result: "mismatched",
+        session_id: "123e4567-e89b-42d3-a456-426614174001"
+      })
+    }
+  ];
+  for (const candidate of cases) {
+    const harness = makeHarness();
+    const initial = JSON.parse(runCompanion(harness, ["advise", "--background", "first"]).stdout);
+    waitForJob(harness, initial.jobId, (job) => job.lifecycleState === "completed");
+    fs.writeFileSync(harness.scenarioFile, JSON.stringify({
+      ...harness.scenario,
+      stdoutBase64: Buffer.from(candidate.stdout).toString("base64")
+    }), "utf8");
+    const resumed = runCompanion(harness, [
+      "rescue", "--resume", "--job-id", initial.jobId, `second-${candidate.name}`
+    ]);
+    assert.equal(resumed.status, 0, resumed.stderr);
+    const payload = JSON.parse(resumed.stdout);
+    assert.equal(payload.status, "failed", candidate.name);
+    assert.equal(payload.output, "Claude returned an invalid resumed result envelope.", candidate.name);
+    const job = readJob(harness, payload.jobId);
+    assert.equal(job.status, "failed", candidate.name);
+    assert.equal(job.resultSource, undefined, candidate.name);
+    assert.equal(job.resumeSessionId, undefined, candidate.name);
+  }
 });
 
 supervisedTest("supervised resume fails closed when the provider changes the canonical session id", () => {
