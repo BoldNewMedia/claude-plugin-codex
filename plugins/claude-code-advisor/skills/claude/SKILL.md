@@ -63,7 +63,7 @@ commands. The guaranteed Codex surface is the `$claude` skill mention.
 - Review and adversarial-review are read-only.
 - Write-capable Claude work requires explicit `--write`.
 - Every default companion launch must be non-interactive. Keep the runtime's
-  MCP isolation flags: `--mcp-config '{"mcpServers":{}}'
+  empty strict MCP restriction flags: `--mcp-config '{"mcpServers":{}}'
   --strict-mcp-config --no-chrome`. These are essential for unattended runs;
   without them Claude Code can stop at the MCP permission picker instead of
   producing an answer.
@@ -71,10 +71,9 @@ commands. The guaranteed Codex surface is the `$claude` skill mention.
   Background mode must refuse the current directory and ancestor directories
   with `.mcp.json` unless `--allow-mcp` is explicit. Use `--allow-mcp` only
   after that explicit user approval.
-- Keep read-only prepared local tasks (`do` and `rescue`) on local tools by
-  default: `Read,Glob,Grep`. `advise` may use web tools. For `do` and `rescue`,
-  enable `WebFetch` or `WebSearch` only when the task needs web access and
-  `--allow-web` is explicit.
+- Keep read-only `advise`, `do` and `rescue` tasks on local tools by default:
+  `Read,Glob,Grep`. Enable `WebFetch` or `WebSearch` only when the task needs
+  web access and `--allow-web` is explicit.
 - Do not pass `--model sonnet` for advice, review, adversarial-review, rescue,
   or monitor work unless the user explicitly asks for Sonnet. Let Claude Code
   use the user's configured default model.
@@ -95,6 +94,22 @@ commands. The guaranteed Codex surface is the `$claude` skill mention.
   max-turn limit, rerun with `--max-turns <higher>` or narrow the task.
 - Do not auto-resume a Claude job when the companion says explicit selection
   is required.
+- Resume only through the companion's canonical full Claude session UUID.
+  Plugin job IDs and supervisor lifecycle IDs are never passed to `--resume`.
+  The UUID must come from a validated provider JSON result, and a resumed result
+  must return that same UUID. Legacy ambiguous jobs are not resumable.
+  `--resume --background` must never degrade to a fresh conversation.
+- Treat progress, bounded diagnostics and the authoritative final result as
+  separate data. Never present monitor output as a completed result. New
+  background results are authoritative only after successful exit and strict
+  exact-one-document validation of `claude -p --output-format json`. Never use
+  terminal logs or stderr as a result source. Report unavailable results
+  explicitly.
+- Review commands fail closed if Git fails or the complete working-tree or
+  `--base` diff exceeds 1 MiB. Narrow or split the change; never substitute a
+  stat-only or partial review.
+- Treat malformed or unsupported companion state as a visible integrity error.
+  Do not delete or silently replace the preserved evidence with empty state.
 
 ## Routing
 
@@ -110,10 +125,10 @@ commands. The guaranteed Codex surface is the `$claude` skill mention.
 - `rescue`: use for substantial task handoff, debugging, implementation help,
   or follow-up work. Prefer `--background`. It is read-only unless `--write`
   is explicit.
-- `monitor`: use after a background advise or rescue job to poll Claude logs
-  and active agent state. Default to `--interval-ms 30000`. Prefer the human
-  summary unless the user asks for raw JSON; it reports active/stale state, the
-  last meaningful output line, and the suggested next action.
+- `monitor`: use after a background advise or rescue job to read the
+  plugin-managed supervisor state. Default to `--interval-ms 30000`. It does
+  not read provider logs. Preserve explicit `created`, `starting`, `running`,
+  `cancelling`, `completed`, `cancelled`, `failed` or `interrupted` state.
 - `review`: use for short structured read-only review of local git state.
 - `adversarial-review`: use for challenge reviews, plan attacks, and harness
   checker passes.
@@ -136,17 +151,17 @@ If the companion refuses background mode because the workspace contains
 user whether Claude should use MCP and rerun with `--allow-mcp` only if they
 explicitly approve it.
 
-If a prepared `do` or `rescue` task needs external docs or URLs, ask whether
-web access is acceptable and rerun with `--allow-web`. Otherwise keep local
-review and prepared tasks on `Read,Glob,Grep`.
+If an `advise`, `do` or `rescue` task needs external docs or URLs, ask whether
+web access is acceptable and rerun with `--allow-web`. Otherwise keep the task
+on `Read,Glob,Grep`.
 
 For a vague request like "check with Claude", ask a short clarification unless
 the user clearly wants setup/readiness. If they want setup/readiness, run
 `setup`. If they want Claude to inspect a plan, diff, or question, run `advise`
 with a concrete prompt. Use `--background` for anything likely to take more
 than one short answer. If a foreground `advise` or `rescue` times out, the
-companion automatically launches one background job; monitor that job instead
-of retrying the same prompt.
+companion automatically launches one supervised background job; monitor that
+job instead of retrying the same prompt.
 
 ## Prepared Sonnet Tasks
 

@@ -88,8 +88,8 @@ The stable command form is `$claude`. If your Codex UI exposes the skill as
 | Windows | Not yet independently verified; tester reports are welcome |
 
 Before beta, the project needs repeatable external installation results on
-macOS, Linux and Windows, with no unresolved recurring permission or background
-lifecycle defects.
+macOS, Linux and Windows. Supervised background mode is currently proved only
+on macOS; other platforms fail closed to foreground operation.
 
 See the [alpha testing guide](docs/alpha-testing.md) to join the initial
 compatibility cohort. Windows and Linux reports are particularly useful.
@@ -106,8 +106,8 @@ compatibility cohort. Windows and Linux reports are particularly useful.
   synthesis task.
 - `$claude rescue` hands Claude a debugging or implementation task. It is
   read-only unless you pass `--write`.
-- `$claude monitor` polls a background Claude job and reports whether Claude is
-  active, stale, or finished.
+- `$claude monitor` polls a background Claude job and reports its explicit
+  lifecycle and result state.
 - `$claude status`, `$claude result`, and `$claude cancel` manage Claude jobs.
 
 See the [command reference](docs/commands.md) for complete syntax, examples and
@@ -213,13 +213,19 @@ still open an interactive MCP permission picker before returning an answer.
 Use foreground mode, or pass `--allow-mcp` only after the user explicitly asks
 Claude to use MCP.
 
-The monitor checks Claude every 30 seconds by default. It keeps raw logs in
-JSON output, but the human view shows the useful signal: whether Claude is
-active, the last meaningful line, how long output has been stale, and what to
-do next.
+The monitor reads only plugin-managed state. A checked-in supervisor owns a
+checked-in process-group anchor, which directly starts the `claude -p
+--output-format json` child. The anchor streams bounded stdout and stderr and
+keeps the group identity live through termination and escalation. The
+supervisor commits one terminal state under the state lock. It never uses
+`claude logs`, terminal text or stderr as a result source.
 
-`status` and `monitor` save the latest useful Claude output, so `result` can
-recover it later even if you cancel the job or Claude's live log socket is gone.
+For new background jobs, `result` is available only after successful process
+exit and strict validation of exactly one UTF-8 provider JSON document. The
+envelope must report a successful result, a string payload and a canonical
+session UUID. Trailing text, multiple documents, duplicate critical keys,
+oversized output and resume identity changes fail closed. Repeated `monitor`,
+`result` and late `cancel` calls cannot replace a committed result.
 
 Foreground `advise` and `rescue` calls have a two-minute timeout. If one times
 out, the companion records the timed-out attempt and starts one background job
@@ -265,10 +271,9 @@ Background mode has an extra guard: if the current directory or any ancestor
 contains `.mcp.json`, background launch is blocked unless you pass
 `--allow-mcp`. Do that only after the user explicitly asks Claude to use MCP.
 
-Read-only prepared local tasks (`do` and `rescue`) use `Read,Glob,Grep` by
-default. Web tools stay available for `advise`. For local prepared tasks, pass
-`--allow-web` only when the task needs external URLs or docs; this keeps local
-code reviews from stopping at a `WebFetch` permission prompt.
+Read-only `advise`, `do` and `rescue` tasks use `Read,Glob,Grep` by default.
+Web tools are denied unless `--allow-web` is explicit. Pass that flag only when
+the task needs external URLs or documentation.
 
 The plugin does not force Sonnet for advisor, review, adversarial-review, or
 rescue work. It lets Claude Code use your configured default model unless you
@@ -279,6 +284,13 @@ default advisor path.
 The companion runtime tracks jobs by workspace and Codex thread ID when Codex
 provides one. If it cannot safely infer a thread, it requires an explicit job
 ID before resuming work.
+
+Plugin job, supervisor lifecycle and canonical Claude session identities remain
+separate. Resume uses only the canonical full session UUID returned by a
+validated provider JSON envelope, and the resumed envelope must return the same
+UUID. Legacy ambiguous and in-flight jobs are not reconciled from logs or
+resumed. Foreground and background `rescue --resume` never silently start a new
+conversation. A read-only command cannot resume a write-capable session.
 
 Claude Code must already be installed and authenticated on the host:
 
@@ -317,8 +329,15 @@ CLAUDE_COMPANION_STATE_ROOT=/path/to/writable/state \
 
 This is useful in sandboxed Codex environments where the default Codex home
 path is readable but not writable. The state root should be local, private, and
-excluded from version control because it can contain job prompts, Claude output,
-workspace paths, and review results.
+excluded from version control because it can contain validated Claude results
+and bounded job metadata. New supervised records do not persist prompts, raw
+stdout, raw stderr, terminal logs, credentials or environment values.
+
+State mutations are serialised across companion processes and committed with
+an atomic same-directory replacement. State and pointer files use mode `0600`;
+their directories use mode `0700`. Malformed JSON and unsupported schema
+versions are visible errors. The original evidence is preserved rather than
+silently replaced with empty state.
 
 ## Terms
 
@@ -361,44 +380,64 @@ npm run test:smoke
 CLAUDE_PLUGIN_CODEX_RUN_BG_SMOKE=1 npm run test:smoke
 ```
 
+The authenticated opt-in form uses a disposable Git repository and a separate
+temporary state root. It checks the installed CLI help contract, exact and
+idempotent nonce results, a canonical full-UUID foreground resume and a
+background resume through the supervised print lifecycle. It inherits the
+invoking process environment but neither enumerates nor prints it. Its proved
+restrictions are disposable repository and state roots, an empty strict MCP
+configuration, disabled web tools and Chrome, plan permission mode, and the
+local read-only tools `Read,Glob,Grep`. It verifies immutable results and
+supervisor cleanup before deleting temporary roots. It does not print prompts,
+responses, credentials, session identifiers, provider output or raw stderr.
+The live write-capable route is intentionally not exercised.
+
 Optional end-to-end smoke test against an installed Codex plugin:
 
 ```bash
 npm run test:e2e:codex
 ```
 
-This requires `codex plugin marketplace add ./`, **Claude Code Advisor**
-installed from Codex's plugin directory, and a logged-in Claude Code CLI. It
+This requires `codex plugin marketplace add ./` and **Claude Code Advisor**
+installed from Codex's plugin directory. It
 starts a fresh `codex exec` session and verifies that
 `$claude advise --model sonnet` routes through the installed skill. The test
 uses Codex's `workspace-write` sandbox,
 supplies a private temporary companion state root inside the checkout, and
-removes that state before checking the worktree. Sonnet is used only for this
+removes that state before checking the worktree. If the nested Codex sandbox
+cannot access Claude's authenticated session, the test reports authentication
+unavailability explicitly and verifies routing only. The separate opt-in smoke
+above verifies the authenticated Claude contract. Sonnet is used only for this
 small routing test.
 
 ## Current Limits
 
 - The plugin depends on the installed Claude Code CLI contract. Run
   `$claude setup` after upgrading Claude Code.
-- Background mode is optional. If the companion cannot verify `claude --bg`,
-  `claude agents`, `claude logs`, `claude attach`, and `claude stop`, it
-  degrades to foreground-only behavior.
+- Supervised background mode currently requires macOS. It is unavailable on
+  unproved platforms; there is no provider-background or terminal-log fallback.
+- A live supervisor is the only process allowed to signal the Claude process
+  group it created. After supervisor loss, stored PIDs are not signalling
+  authority: the job becomes `interrupted` and manual orphan recovery may be
+  required. Abrupt supervisor `SIGKILL` and host power loss cannot guarantee
+  descendant cleanup.
 - Background mode refuses the current directory and ancestor directories with
   `.mcp.json` unless `--allow-mcp` is explicit. This avoids Claude Code's
   interactive MCP picker inside Codex, including nested worktrees under a repo
   that has MCP config.
-- Read-only prepared local tasks disable web tools by default. `advise` remains
-  web-capable. Use `--allow-web` for `do` or `rescue` only when the task needs
-  web access.
+- Read-only `advise`, `do` and `rescue` tasks disable web tools by default. Use
+  `--allow-web` only when the task needs external access.
 - Foreground prepared task routes use a larger default turn budget than
   structured review. If Claude reports that it hit the max-turn limit, rerun
   with `--max-turns <higher>` or narrow the task.
 - Working-tree structured reviews stop when untracked files exist because their
   contents are absent from a Git diff and review mode cannot read the workspace.
   Stage the intended files before rerunning the review.
-- `$claude monitor` checks a background job every 30 seconds by default. It
-  reads `claude logs` and `claude agents --json --all`, filters routine terminal
-  noise, and marks repeated output as stale after two minutes.
+- Working-tree and `--base` reviews also fail closed when Git fails or the full
+  diff exceeds 1 MiB. Narrow or split the change and rerun; the companion never
+  downgrades an incomplete diff to a stat-only review.
+- `$claude monitor` checks plugin-managed state every 30 seconds by default.
+  It neither reads provider logs nor interprets terminal progress.
 - Structured review extracts a single complete JSON object from Claude's
   `--output-format json` result envelope, tolerating leading status prose or
   tool-call markup while rejecting ambiguous multiple objects. The extracted
@@ -418,6 +457,20 @@ pointing at a writable directory. Within that root, the companion restricts its
 workspace and thread directories to mode `0700` and state/pointer files to mode
 `0600`. Do not point it at the project repository unless you also ignore that
 path in Git.
+
+If the companion reports malformed or unsupported state, do not delete the
+reported file before inspecting or copying it. The plugin preserves the
+evidence and refuses to continue with fabricated empty state. Resolve the
+corrupt file explicitly, then rerun the command.
+
+If state locking times out and the diagnostic says the recorded owner is no
+longer running, verify that no companion process owns the reported lock before
+removing that one lock file. The companion never breaks a lock from age or PID
+evidence alone.
+
+If a review reports the 1 MiB diff limit, split the review into smaller complete
+changes or narrow the selected base. Do not rely on a partial or stat-only
+review.
 
 ## License
 

@@ -1,37 +1,58 @@
 #!/usr/bin/env node
 
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
+import net from "node:net";
+import os from "node:os";
 import path from "node:path";
 import process from "node:process";
+import { fileURLToPath } from "node:url";
 
 import {
-  buildBackgroundArgs,
   buildClaudeArgs,
   buildReviewPrompt,
+  buildSupervisedPrintArgs,
+  DEFAULT_DIFF_MAX_BYTES,
   generateJobId,
+  isCanonicalResumeReference,
+  isSupervisedJob,
   loadState,
   parseClaudeJsonResult,
-  parseBackgroundLaunch,
   renderHuman,
   resolveStateDir,
   resolveStateRoot,
   resolveWorkspaceIndexDir,
   resolveWorkspaceRoot,
-  saveState,
   selectResumeCandidate,
+  supervisorPaths,
+  SUPERVISED_RECORD_VERSION,
+  SUPERVISED_TRANSPORT,
+  transactState,
+  transitionSupervisedJob,
+  updateLatestStateDir,
   upsertJob,
+  validateSupervisedClaudeResult,
   validateReviewPayload
 } from "./lib/runtime.mjs";
+
+const supervisorScript = fileURLToPath(new URL("./claude-supervisor.mjs", import.meta.url));
 
 const DEFAULT_TIMEOUT_MS = 120000;
 const DEFAULT_TASK_MAX_TURNS = 20;
 const DEFAULT_REVIEW_MAX_TURNS = 1;
 const DEFAULT_MONITOR_INTERVAL_MS = 30000;
 const DEFAULT_MONITOR_CHECKS = 20;
+const MAX_MONITOR_CHECKS = 1000;
+const MAX_MONITOR_INTERVAL_MS = 60 * 60 * 1000;
 const DEFAULT_STALE_AFTER_MS = 120000;
 const DEFAULT_CLAUDE_EFFORT = "xhigh";
 const SUPPORTED_MAJOR = 2;
+const MAX_DIAGNOSTIC_CHARS = 2000;
+const DEFAULT_BACKGROUND_TIMEOUT_MS = 10 * 60 * 1000;
+const DEFAULT_STDOUT_LIMIT_BYTES = 1024 * 1024;
+const DEFAULT_STDERR_LIMIT_BYTES = 64 * 1024;
+const SUPERVISOR_LAUNCH_TIMEOUT_MS = 10000;
 
 function parseArgs(argv) {
   const options = {};
@@ -99,16 +120,15 @@ function normalizeLogLine(line) {
     .trim();
 }
 
-function isCompletedLogOutput(output) {
-  return /(?:^|\n)\s*[✢✳✶✻✽·]?\s*(?:cogitated|cooked|churned|worked) for \d+/i.test(String(output || ""));
-}
-
 function isMeaningfulLogLine(line) {
   const text = normalizeLogLine(line);
   if (!text) {
     return false;
   }
   const withoutSpinner = text.replace(/^[✢✳✶✻✽·\s]+/, "");
+  if (/^[✢✳✶✻✽·]/.test(text)) {
+    return false;
+  }
   if (text.length < 3) {
     return false;
   }
@@ -128,6 +148,12 @@ function isMeaningfulLogLine(line) {
     return false;
   }
   if (/^claude code$/i.test(text)) {
+    return false;
+  }
+  if (/^welcome back\b/i.test(text) || /^you:\s/i.test(text) || /\b[\w.+-]+@[\w.-]+\.[a-z]{2,}\b/i.test(text)) {
+    return false;
+  }
+  if (/\b(?:claude pro|organization)\b/i.test(text)) {
     return false;
   }
   if (/claude codev?\d/i.test(text)) {
@@ -214,10 +240,14 @@ function runClaude(args, options = {}) {
   if (result.error) {
     throw result.error;
   }
+  if (result.signal) {
+    throw new Error(`Claude command ended from signal ${result.signal}.`);
+  }
   return {
-    status: result.status ?? 0,
+    status: result.status ?? 1,
     stdout: result.stdout || "",
-    stderr: result.stderr || ""
+    stderr: result.stderr || "",
+    signal: result.signal || null
   };
 }
 
@@ -228,19 +258,6 @@ function isTimeoutError(error) {
 function isMaxTurnLimitOutput(value) {
   const text = String(value || "");
   return /\b(?:hit|reached)\s+(?:the\s+)?max[- ]turns?\b/i.test(text) || /\bmax[- ]turn limit\b/i.test(text);
-}
-
-function resultWithMaxTurnHint(result) {
-  const combined = `${result.stdout || ""}\n${result.stderr || ""}`;
-  if (!isMaxTurnLimitOutput(combined)) {
-    return result.stdout.trim();
-  }
-  return [
-    (result.stdout || result.stderr || "").trim(),
-    "Claude hit the max-turn limit. Rerun with `--max-turns <higher>` or narrow the task."
-  ]
-    .filter(Boolean)
-    .join("\n");
 }
 
 function commandAvailable(commandArgs) {
@@ -275,8 +292,28 @@ function currentContext(options = {}) {
     stateRoot,
     stateDir,
     indexDir,
-    state: loadState(stateDir)
+    state: loadState(stateDir, { pathBoundary: stateRoot })
   };
+}
+
+function boundedDiagnostic(value) {
+  return stripTerminalControl(value)
+    .replaceAll(os.homedir(), "<home>")
+    .replace(/(?:^|\s)\/?(?:Users|home)\/[\w.-]+\//g, " <path>/")
+    .slice(0, MAX_DIAGNOSTIC_CHARS)
+    .trim();
+}
+
+function classifyStructuredAgentFailure(error) {
+  const classification = error instanceof Error ? error.message : "";
+  if ([
+    "structured-agent-json-empty",
+    "structured-agent-json-invalid",
+    "structured-agent-schema-invalid"
+  ].includes(classification)) {
+    return classification;
+  }
+  return "structured-agent-command-unavailable";
 }
 
 function findProjectMcpConfig(ctx) {
@@ -315,21 +352,134 @@ function assertBackgroundMcpSafe(ctx, options = {}) {
   );
 }
 
-function persistContext(ctx, state) {
-  const saved = saveState(ctx.stateDir, state);
-  fs.mkdirSync(ctx.indexDir, { recursive: true, mode: 0o700 });
-  fs.chmodSync(ctx.indexDir, 0o700);
-  const latestStateFile = path.join(ctx.indexDir, "latest-state-dir");
-  fs.writeFileSync(latestStateFile, `${ctx.stateDir}\n`, { encoding: "utf8", mode: 0o600 });
-  fs.chmodSync(latestStateFile, 0o600);
+function persistContext(ctx, mutator) {
+  const saved = transactState(ctx.stateDir, mutator, { pathBoundary: ctx.stateRoot });
+  updateLatestStateDir(ctx.indexDir, ctx.stateDir, { pathBoundary: ctx.stateRoot });
+  ctx.state = saved;
   return saved;
+}
+
+function publicJob(job) {
+  if (!job || !isSupervisedJob(job)) return job;
+  const { supervisor: _supervisor, ...safe } = job;
+  return safe;
+}
+
+function boundedPositiveInteger(value, fallback, minimum, maximum) {
+  const parsed = Number(value ?? fallback);
+  if (!Number.isInteger(parsed) || parsed < minimum || parsed > maximum) {
+    throw new Error("Invalid bounded lifecycle configuration.");
+  }
+  return parsed;
+}
+
+function transitionManaged(ctx, jobId, transition) {
+  const result = transitionSupervisedJob(ctx.stateDir, jobId, transition, { pathBoundary: ctx.stateRoot });
+  ctx.state = loadState(ctx.stateDir, { pathBoundary: ctx.stateRoot });
+  updateLatestStateDir(ctx.indexDir, ctx.stateDir, { pathBoundary: ctx.stateRoot });
+  return result;
+}
+
+function sendSupervisorCommand(ctx, job, command, timeoutMs = 2000) {
+  return new Promise((resolve) => {
+    const control = supervisorPaths(ctx.stateDir, job.id);
+    const socket = net.createConnection(control.socket);
+    const chunks = [];
+    let bytes = 0;
+    let settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      socket.destroy();
+      resolve(value);
+    };
+    const timer = setTimeout(() => finish({ ok: false }), timeoutMs);
+    socket.on("connect", () => socket.end(JSON.stringify({
+      token: job.supervisor?.token,
+      command
+    })));
+    socket.on("data", (chunk) => {
+      bytes += chunk.length;
+      if (bytes > 4096) finish({ ok: false });
+      else chunks.push(Buffer.from(chunk));
+    });
+    socket.on("end", () => {
+      try {
+        const parsed = JSON.parse(Buffer.concat(chunks).toString("utf8"));
+        finish(parsed?.ok === true ? parsed : { ok: false });
+      } catch {
+        finish({ ok: false });
+      }
+    });
+    socket.on("error", () => finish({ ok: false }));
+  });
+}
+
+function launchSupervisor(config) {
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, [supervisorScript], {
+      cwd: config.cwd,
+      env: process.env,
+      detached: true,
+      shell: false,
+      stdio: ["pipe", "ignore", "ignore", "ipc"]
+    });
+    let settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      child.removeAllListeners("error");
+      child.removeAllListeners("exit");
+      child.removeAllListeners("message");
+      if (child.connected) child.disconnect();
+      child.unref();
+      resolve(value);
+    };
+    const timer = setTimeout(() => finish({ ok: false, classification: "interrupted-supervisor" }), SUPERVISOR_LAUNCH_TIMEOUT_MS);
+    child.once("error", () => finish({ ok: false, classification: "spawn-failure" }));
+    child.once("exit", () => finish({ ok: false, classification: "worker-failure" }));
+    child.on("message", (message) => {
+      if (message?.type === "ready") finish({ ok: true, pid: child.pid });
+      if (message?.type === "failed") finish({ ok: false, classification: message.classification || "worker-failure" });
+    });
+    child.stdin.once("error", () => finish({ ok: false, classification: "spawn-failure" }));
+    child.stdin.end(JSON.stringify(config));
+  });
+}
+
+function runGit(cwd, args, label, maxBuffer = DEFAULT_DIFF_MAX_BYTES) {
+  const result = spawnSync("git", args, { cwd, encoding: "utf8", maxBuffer });
+  if (result.error) {
+    const overflow = result.error.code === "ENOBUFS" || /maxbuffer|buffer/i.test(result.error.message || "");
+    if (overflow) {
+      throw new Error(
+        `${label} exceeded the ${DEFAULT_DIFF_MAX_BYTES}-byte review limit. Narrow or split the change, then rerun the review.`
+      );
+    }
+    throw new Error(`${label} could not be captured because Git failed to execute (${result.error.code || "unknown error"}).`);
+  }
+  if (result.signal) {
+    throw new Error(`${label} could not be captured because Git ended from signal ${result.signal}.`);
+  }
+  if (result.status !== 0) {
+    throw new Error(`${label} could not be captured because Git exited with status ${result.status}.`);
+  }
+  const stdout = result.stdout || "";
+  if (Buffer.byteLength(stdout, "utf8") > maxBuffer) {
+    throw new Error(
+      `${label} exceeded the ${DEFAULT_DIFF_MAX_BYTES}-byte review limit. Narrow or split the change, then rerun the review.`
+    );
+  }
+  return stdout;
 }
 
 function gitContext(cwd, options = {}) {
   const target = options.base ? `${options.base}...HEAD` : null;
   if (!target) {
-    const untracked = spawnSync("git", ["ls-files", "--others", "--exclude-standard"], { cwd, encoding: "utf8" });
-    const paths = untracked.status === 0 ? untracked.stdout.trim().split(/\r?\n/).filter(Boolean) : [];
+    const untracked = runGit(cwd, ["ls-files", "--others", "--exclude-standard"], "Untracked-file check", 256 * 1024);
+    const paths = untracked.trim().split(/\r?\n/).filter(Boolean);
     if (paths.length) {
       const shown = paths.slice(0, 20).map((file) => `- ${file}`).join("\n");
       const remaining = paths.length > 20 ? `\n- ...and ${paths.length - 20} more` : "";
@@ -339,14 +489,10 @@ function gitContext(cwd, options = {}) {
     }
   }
   const args = target ? ["diff", "--stat", target] : ["status", "--short", "--untracked-files=all"];
-  const result = spawnSync("git", args, { cwd, encoding: "utf8" });
-  const first = result.status === 0 ? result.stdout : result.stderr;
+  const first = runGit(cwd, args, "Git review summary", 256 * 1024);
   const diffArgs = target ? ["diff", target, "--"] : ["diff", "HEAD", "--"];
-  let diff = spawnSync("git", diffArgs, { cwd, encoding: "utf8", maxBuffer: 1024 * 1024 });
-  if (!target && diff.status !== 0) {
-    diff = spawnSync("git", ["diff", "--"], { cwd, encoding: "utf8", maxBuffer: 1024 * 1024 });
-  }
-  return [first, diff.status === 0 ? diff.stdout : diff.stderr].join("\n").trim();
+  const diff = runGit(cwd, diffArgs, target ? "Base review diff" : "Working-tree review diff");
+  return [first, diff].join("\n").trim();
 }
 
 function detectCapabilities() {
@@ -354,22 +500,13 @@ function detectCapabilities() {
   const version = parseClaudeVersion(versionResult.stdout || versionResult.stderr);
   const auth = runClaude(["auth", "status", "--text"], { timeoutMs: 10000 });
   const print = commandAvailable(["-p", "Return {}", "--output-format", "text", "--max-turns", "1", "--tools", ""]);
-  const agents = commandAvailable(["agents", "--help"]);
-  const logs = commandAvailable(["logs", "--help"]);
-  const stop = commandAvailable(["stop", "--help"]);
-  const attach = commandAvailable(["attach", "--help"]);
-  const background = version.supported && agents && logs && stop && attach;
+  const background = version.supported && print && process.platform === "darwin";
   return {
     version,
     auth: {
-      loggedIn: auth.status === 0,
-      detail: (auth.stdout || auth.stderr).trim()
+      loggedIn: auth.status === 0
     },
     print,
-    agents,
-    logs,
-    stop,
-    attach,
     background
   };
 }
@@ -380,7 +517,7 @@ function handleSetup(argv) {
   const nodeMajor = Number(process.versions.node.split(".")[0]);
   const capabilities = detectCapabilities();
   const ready = nodeMajor >= 18 && capabilities.version.supported && capabilities.auth.loggedIn && capabilities.print;
-  const state = persistContext(ctx, { ...ctx.state, capabilities });
+  const state = persistContext(ctx, (current) => ({ ...current, capabilities }));
   output(
     {
       ready,
@@ -396,7 +533,7 @@ function createJob(ctx, kind, options = {}) {
   return {
     id: generateJobId(kind),
     kind,
-    status: "running",
+    status: options.status || "running",
     write: Boolean(options.write),
     codexThreadId: process.env.CODEX_THREAD_ID || null,
     workspaceRoot: ctx.workspaceRoot,
@@ -404,23 +541,93 @@ function createJob(ctx, kind, options = {}) {
   };
 }
 
-function completeJob(ctx, job, patch) {
-  const state = upsertJob(ctx.state, { ...job, ...patch });
-  ctx.state = persistContext(ctx, state);
-  return ctx.state.jobs.find((item) => item.id === job.id);
+function insertJob(ctx, job) {
+  const state = persistContext(ctx, (current) => {
+    if (current.jobs.some((item) => item.id === job.id)) {
+      throw new Error(`Claude job id collision: ${job.id}.`);
+    }
+    return upsertJob(current, job);
+  });
+  return state.jobs.find((item) => item.id === job.id);
 }
 
-function runForeground(ctx, kind, prompt, options = {}) {
-  const job = createJob(ctx, kind, { write: options.write, summary: prompt.slice(0, 100) });
-  ctx.state = persistContext(ctx, upsertJob(ctx.state, job));
-  const resume = options.resume ? selectResumeCandidate(ctx.state.jobs.filter((item) => item.id !== job.id), process.env, options) : null;
+function completeJob(ctx, job, patch) {
+  const jobId = typeof job === "string" ? job : job.id;
+  const state = persistContext(ctx, (current) => {
+    const existing = current.jobs.find((item) => item.id === jobId);
+    if (!existing) {
+      throw new Error(`Claude job disappeared during state update: ${jobId}.`);
+    }
+    const nextPatch = { ...patch };
+    if (existing.resultAuthoritativeAt && Object.hasOwn(nextPatch, "result")) {
+      if (existing.result !== nextPatch.result) {
+        throw new Error(`Refusing to overwrite authoritative result for Claude job ${jobId}.`);
+      }
+      delete nextPatch.result;
+    }
+    if (existing.resultAuthoritativeAt) {
+      for (const field of ["resultState", "resultDiagnostic", "resultSource", "resultAuthoritativeAt"]) {
+        delete nextPatch[field];
+      }
+    }
+    if (
+      (["completed", "cancelled"].includes(existing.status) && nextPatch.status !== existing.status) ||
+      (["failed", "timed_out"].includes(existing.status) &&
+        ["launching", "running", "active", "unknown", "unavailable"].includes(nextPatch.status)) ||
+      (existing.status === "launch_uncertain" && ["unknown", "unavailable"].includes(nextPatch.status))
+    ) {
+      delete nextPatch.status;
+    }
+    if (
+      ["completed", "cancelled"].includes(existing.lifecycleState) &&
+      nextPatch.lifecycleState !== existing.lifecycleState
+    ) {
+      delete nextPatch.lifecycleState;
+    }
+    if (
+      existing.lifecycleState === "launch_uncertain" &&
+      ["unknown", "unavailable"].includes(nextPatch.lifecycleState)
+    ) {
+      delete nextPatch.lifecycleState;
+    }
+    return upsertJob(current, { id: jobId, ...nextPatch });
+  });
+  return state.jobs.find((item) => item.id === jobId);
+}
+
+function resolveJobResumeReference(ctx, candidate, options = {}) {
+  if (
+    [candidate.lifecycleState, candidate.status].includes("completed") &&
+    candidate.resultSource === "provider-json" &&
+    isCanonicalResumeReference(candidate?.resumeSessionId)
+  ) {
+    return candidate.resumeSessionId;
+  }
+  void ctx;
+  void options;
+  throw new Error("Claude resume identity is unavailable because it was not validated from a provider JSON result.");
+}
+
+async function runForeground(ctx, kind, prompt, options = {}) {
+  const resume = options.resume
+    ? selectResumeCandidate(ctx.state.jobs, process.env, {
+        explicitJobId: options["job-id"] || null,
+        write: Boolean(options.write)
+      })
+    : null;
+  if (options.resume && !resume) {
+    throw new Error("No safe Claude job is available to resume. Pass an exact --job-id or start fresh.");
+  }
+  const resumeSessionId = resume ? resolveJobResumeReference(ctx, resume, options) : null;
+  const job = createJob(ctx, kind, { write: options.write, summary: `${kind} task` });
+  insertJob(ctx, job);
   const args = buildClaudeArgs({
     mode: kind,
     prompt,
     outputFormat: options.outputFormat || "text",
     maxTurns: Number(options.maxTurns || DEFAULT_TASK_MAX_TURNS),
     write: Boolean(options.write),
-    resumeSessionId: resume?.claudeSessionId ?? null,
+    resumeSessionId,
     model: options.model || null,
     effort: options.effort || DEFAULT_CLAUDE_EFFORT,
     allowMcp: Boolean(options["allow-mcp"]),
@@ -433,15 +640,15 @@ function runForeground(ctx, kind, prompt, options = {}) {
     if (isTimeoutError(error) && !options["no-background-fallback"]) {
       completeJob(ctx, job, {
         status: "timed_out",
-        stderr: error.message,
-        result: error.message
+        failureDiagnostic: `Claude command timed out after ${Number(options.timeoutMs || DEFAULT_TIMEOUT_MS)}ms.`,
+        result: `Claude command timed out after ${Number(options.timeoutMs || DEFAULT_TIMEOUT_MS)}ms.`
       });
       if (ctx.state.capabilities && !ctx.state.capabilities.background) {
         throw error;
       }
-      return runBackground(ctx, kind, prompt, {
+      return await runBackground(ctx, kind, prompt, {
         ...options,
-        timeoutMs: options["background-timeout-ms"] || options.backgroundTimeoutMs || 30000,
+        "timeout-ms": options["background-timeout-ms"] || options.backgroundTimeoutMs || 30000,
         fallbackFromJobId: job.id,
         fallbackReason: "foreground-timeout",
         fallbackMessage: `Foreground Claude timed out after ${Number(options.timeoutMs || DEFAULT_TIMEOUT_MS)}ms; launched a background job.`
@@ -449,63 +656,151 @@ function runForeground(ctx, kind, prompt, options = {}) {
     }
     completeJob(ctx, job, {
       status: "failed",
-      stderr: error.message,
-      result: error.message
+      failureDiagnostic: "Claude command failed before returning a supported result.",
+      result: "Claude command failed before returning a supported result."
     });
     throw error;
   }
   const status = result.status === 0 ? "completed" : "failed";
-  return completeJob(ctx, job, {
+  const failedForMaxTurns = result.status !== 0 && isMaxTurnLimitOutput(`${result.stdout}\n${result.stderr}`);
+  let validatedResume = null;
+  if (result.status === 0 && resumeSessionId && options.outputFormat === "json") {
+    try {
+      validatedResume = validateSupervisedClaudeResult(Buffer.from(result.stdout, "utf8"), resumeSessionId);
+    } catch {
+      const failed = completeJob(ctx, job, {
+        status: "failed",
+        failureDiagnostic: "Claude returned an invalid resumed result envelope.",
+        result: "Claude returned an invalid resumed result envelope."
+      });
+      return { ...failed, stdout: "", stderr: "" };
+    }
+  }
+  const completed = completeJob(ctx, job, {
     status,
-    stdout: result.stdout,
-    stderr: result.stderr,
-    claudeSessionId: resume?.claudeSessionId ?? null,
-    result: result.status === 0 ? result.stdout.trim() : resultWithMaxTurnHint(result)
+    resumeSessionId: validatedResume?.sessionId || resumeSessionId,
+    resultSource: validatedResume ? "provider-json" : undefined,
+    failureDiagnostic: result.status === 0
+      ? null
+      : failedForMaxTurns
+        ? "Claude hit the max-turn limit."
+        : `Claude command returned non-zero status ${result.status}.`,
+    result: result.status === 0
+      ? result.stdout.trim()
+      : failedForMaxTurns
+        ? "Claude hit the max-turn limit. Rerun with `--max-turns <higher>` or narrow the task."
+        : `Claude command failed with status ${result.status}.`
   });
+  return { ...completed, stdout: result.stdout, stderr: result.stderr };
 }
 
-function runBackground(ctx, kind, prompt, options = {}) {
-  if (ctx.state.capabilities && !ctx.state.capabilities.background) {
-    throw new Error("Claude background mode is unavailable. Run foreground or rerun setup after upgrading Claude Code.");
-  }
+async function runBackground(ctx, kind, prompt, options = {}) {
   assertBackgroundMcpSafe(ctx, options);
-  const job = createJob(ctx, kind, { write: options.write, summary: prompt.slice(0, 100) });
-  const args = buildBackgroundArgs({
-    prompt,
-    name: `codex-${job.id}`,
+  if (process.platform !== "darwin") {
+    throw new Error("Claude supervised background mode is unavailable on this platform.");
+  }
+  if (!prompt || !String(prompt).trim()) throw new Error("A prompt is required.");
+  const resume = options.resume
+    ? selectResumeCandidate(ctx.state.jobs, process.env, {
+        explicitJobId: options["job-id"] || null,
+        write: Boolean(options.write)
+      })
+    : null;
+  if (options.resume && !resume) {
+    throw new Error("No safe Claude job is available to resume. Pass an exact --job-id or start fresh.");
+  }
+  const resumeSessionId = resume ? resolveJobResumeReference(ctx, resume, options) : null;
+  const jobId = generateJobId(kind);
+  const token = randomUUID();
+  const lifecycleId = `supervisor-${randomUUID()}`;
+  const job = {
+    id: jobId,
+    recordVersion: SUPERVISED_RECORD_VERSION,
+    transport: SUPERVISED_TRANSPORT,
+    stateGeneration: 0,
+    lifecycleState: "created",
+    status: "created",
+    kind,
+    authority: options.write ? "write" : "read",
+    write: Boolean(options.write),
+    codexThreadId: process.env.CODEX_THREAD_ID || null,
+    lifecycleId,
+    resultState: "unavailable",
+    cleanupStatus: "pending",
+    resumeSessionId,
+    resumedFromJobId: resume?.id ?? null,
+    notice: options.fallbackMessage || null,
+    fallbackFromJobId: options.fallbackFromJobId || null,
+    fallbackReason: options.fallbackReason || null,
+    supervisor: { token, pid: null }
+  };
+  insertJob(ctx, job);
+  const starting = transitionManaged(ctx, job.id, {
+    expectedGeneration: 0,
+    expectedStates: ["created"],
+    toState: "starting",
+    patch: { startingAt: new Date().toISOString() }
+  });
+  if (!starting.applied) throw new Error("Claude supervisor could not claim the created job.");
+  const claudeArgs = buildSupervisedPrintArgs({
     mode: kind,
     write: Boolean(options.write),
+    resumeSessionId,
     model: options.model || null,
     effort: options.effort || DEFAULT_CLAUDE_EFFORT,
     allowMcp: Boolean(options["allow-mcp"]),
-    allowWeb: Boolean(options["allow-web"])
+    allowWeb: Boolean(options["allow-web"]),
+    maxTurns: boundedPositiveInteger(options["max-turns"], DEFAULT_TASK_MAX_TURNS, 1, 1000)
   });
-  const result = runClaude(args, { cwd: ctx.cwd, timeoutMs: Number(options.timeoutMs || 30000) });
-  if (result.status !== 0) {
-    throw new Error(result.stderr || result.stdout || "Claude background launch failed.");
-  }
-  const claudeSessionId = parseBackgroundLaunch(result.stdout);
-  if (!claudeSessionId) {
-    throw new Error(`Could not parse Claude background session id from output:\n${result.stdout}`);
-  }
-  const next = completeJob(ctx, job, {
-    status: "running",
-    claudeSessionId,
-    stdout: result.stdout,
-    result: options.fallbackMessage ? `${options.fallbackMessage}\nClaude session: ${claudeSessionId}` : result.stdout.trim(),
-    fallbackFromJobId: options.fallbackFromJobId || null,
-    fallbackReason: options.fallbackReason || null
+  const launched = await launchSupervisor({
+    jobId,
+    token,
+    prompt,
+    claudeArgs,
+    cwd: ctx.cwd,
+    stateDir: ctx.stateDir,
+    stateRoot: ctx.stateRoot,
+    expectedSessionId: resumeSessionId,
+    timeoutMs: boundedPositiveInteger(options["timeout-ms"], DEFAULT_BACKGROUND_TIMEOUT_MS, 100, 24 * 60 * 60 * 1000),
+    stdoutLimitBytes: boundedPositiveInteger(
+      process.env.CLAUDE_COMPANION_STDOUT_LIMIT_BYTES,
+      DEFAULT_STDOUT_LIMIT_BYTES,
+      64,
+      16 * 1024 * 1024
+    ),
+    stderrLimitBytes: boundedPositiveInteger(
+      process.env.CLAUDE_COMPANION_STDERR_LIMIT_BYTES,
+      DEFAULT_STDERR_LIMIT_BYTES,
+      64,
+      4 * 1024 * 1024
+    )
   });
-  return next;
+  ctx.state = loadState(ctx.stateDir, { pathBoundary: ctx.stateRoot });
+  let current = ctx.state.jobs.find((item) => item.id === jobId);
+  if (!launched.ok && current?.lifecycleState === "starting") {
+    current = transitionManaged(ctx, jobId, {
+      expectedStates: ["starting"],
+      toState: "interrupted",
+      patch: {
+        failureClassification: launched.classification || "interrupted-supervisor",
+        cleanupStatus: "failed",
+        terminalAt: new Date().toISOString()
+      }
+    }).job;
+  }
+  if (!launched.ok && current?.lifecycleState !== "running") {
+    throw new Error("Claude supervised background launch failed.");
+  }
+  return current;
 }
 
-function handleTaskCommand(argv, kind) {
+async function handleTaskCommand(argv, kind) {
   const { options, positionals } = parseArgs(argv);
   const ctx = currentContext(options);
   const prompt = positionals.join(" ").trim();
   const job = options.background
-    ? runBackground(ctx, kind, prompt, options)
-    : runForeground(ctx, kind, prompt, {
+    ? await runBackground(ctx, kind, prompt, options)
+    : await runForeground(ctx, kind, prompt, {
         ...options,
         outputFormat: options["output-format"] || "text",
         maxTurns: options["max-turns"],
@@ -516,25 +811,25 @@ function handleTaskCommand(argv, kind) {
       jobId: job.id,
       status: job.status,
       claudeSessionId: job.claudeSessionId ?? null,
-      output: job.result ?? job.stdout ?? ""
+      output: job.result ?? job.notice ?? job.stdout ?? ""
     },
     options.json
   );
 }
 
-function handleAdvise(argv) {
-  handleTaskCommand(argv, "advise");
+async function handleAdvise(argv) {
+  await handleTaskCommand(argv, "advise");
 }
 
-function handleRescue(argv) {
-  handleTaskCommand(argv, "rescue");
+async function handleRescue(argv) {
+  await handleTaskCommand(argv, "rescue");
 }
 
-function handleDo(argv) {
-  handleTaskCommand(argv, "do");
+async function handleDo(argv) {
+  await handleTaskCommand(argv, "do");
 }
 
-function handleReview(argv, kind) {
+async function handleReview(argv, kind) {
   const { options, positionals } = parseArgs(argv);
   const ctx = currentContext(options);
   const focus = positionals.join(" ").trim();
@@ -544,14 +839,14 @@ function handleReview(argv, kind) {
     gitContext: gitContext(ctx.cwd, options),
     focus
   });
-  const job = runForeground(ctx, kind, prompt, {
+  const job = await runForeground(ctx, kind, prompt, {
     ...options,
     outputFormat: "json",
     maxTurns: options["max-turns"] || DEFAULT_REVIEW_MAX_TURNS,
     timeoutMs: options["timeout-ms"]
   });
   if (job.status !== "completed") {
-    output({ jobId: job.id, status: job.status, stderr: job.stderr }, options.json);
+    output({ jobId: job.id, status: job.status, diagnostic: job.failureDiagnostic }, options.json);
     process.exitCode = 1;
     return;
   }
@@ -561,7 +856,7 @@ function handleReview(argv, kind) {
     claudeJson = parseClaudeJsonResult(job.stdout);
     parsed = validateReviewPayload(claudeJson.contentRaw);
   } catch (error) {
-    const retry = runForeground(ctx, kind, `${prompt}\n\nYour previous response was invalid: ${error.message}. Return JSON only.`, {
+    const retry = await runForeground(ctx, kind, `${prompt}\n\nYour previous response was invalid: ${error.message}. Return JSON only.`, {
       ...options,
       outputFormat: "json",
       maxTurns: 1,
@@ -583,72 +878,69 @@ function findJob(ctx, reference) {
   if (!reference) {
     return ctx.state.jobs[0] || null;
   }
-  return ctx.state.jobs.find((job) => job.id === reference || job.claudeSessionId === reference) || null;
+  const matches = ctx.state.jobs.filter(
+    (job) =>
+      job.id === reference ||
+      job.lifecycleId === reference ||
+      (!isCanonicalResumeReference(job.claudeSessionId) && job.claudeSessionId === reference)
+  );
+  if (matches.length > 1) {
+    throw new Error("Claude lifecycle reference is ambiguous. Use the exact managed job ID.");
+  }
+  if (matches.length === 0 && isCanonicalResumeReference(reference)) {
+    throw new Error("A canonical resume UUID cannot identify a lifecycle job. Use the exact managed job ID or lifecycle ID.");
+  }
+  return matches[0] || null;
 }
 
-function parseAgentsJson(output, claudeSessionId) {
-  const text = String(output || "").trim();
-  if (!text) {
-    return { output: "" };
+function classifyAgentLifecycle(match) {
+  if (!match) return "unavailable";
+  const state = String(match.state || "").toLowerCase();
+  const status = String(match.status || "").toLowerCase();
+  if (
+    ["done", "complete", "completed", "finished"].includes(state) ||
+    ["done", "complete", "completed", "finished"].includes(status)
+  ) return "completed";
+  if (["cancelled", "canceled", "stopped"].includes(state) || ["cancelled", "canceled", "stopped"].includes(status)) {
+    return "cancelled";
   }
-  try {
-    const parsed = JSON.parse(text);
-    const sessions = Array.isArray(parsed) ? parsed : parsed.sessions || parsed.agents || [];
-    const match = sessions.find((session) => {
-      return (
-        session?.id === claudeSessionId ||
-        session?.sessionId === claudeSessionId ||
-        session?.session_id === claudeSessionId
-      );
-    });
-    const lifecycle = `${match?.status || ""} ${match?.state || ""}`.toLowerCase();
-    return {
-      output: text,
-      sessions,
-      match: match || null,
-      active: /\b(active|running|busy|working)\b/.test(lifecycle),
-      completed: /\b(done|completed|complete|stopped|exited|finished)\b/.test(lifecycle)
-    };
-  } catch {
-    return { output: text };
-  }
+  if (["failed", "error"].includes(state) || ["failed", "error"].includes(status)) return "unavailable";
+  if (
+    ["active", "running", "working", "busy", "starting", "blocked", "stalled"].includes(state) ||
+    ["active", "running", "working", "busy", "starting", "blocked", "stalled"].includes(status)
+  ) return "active";
+  return "unknown";
+}
+
+function publicAgentMatch(match) {
+  if (!match) return null;
+  return {
+    id: match.id ?? match.agentId ?? match.agent_id ?? null,
+    sessionId: match.sessionId ?? match.session_id ?? null,
+    name: match.name ?? match.title ?? null,
+    kind: match.kind ?? null,
+    status: match.status ?? null,
+    state: match.state ?? null
+  };
 }
 
 function readLiveStatus(job, options = {}) {
-  if (!job?.claudeSessionId) {
-    return {
-      checkedAt: new Date().toISOString(),
-      active: false,
-      available: false,
-      error: "Job has no Claude background session id.",
-      job
-    };
-  }
-  const timeoutMs = Number(options["timeout-ms"] || 10000);
-  const logs = runClaude(["logs", job.claudeSessionId], { timeoutMs });
-  const agents = runClaude(["agents", "--json", "--all"], { timeoutMs });
-  const agentsOutput = stripTerminalControl(`${agents.stdout || ""}${agents.stderr || ""}`);
-  const logsOutput = stripTerminalControl(`${logs.stdout || ""}${logs.stderr || ""}`);
-  const agentStatus = agents.status === 0 ? parseAgentsJson(agentsOutput, job.claudeSessionId) : { output: agentsOutput };
-  const meaningfulLogLines = extractMeaningfulLogLines(logsOutput);
-  const completed = isCompletedLogOutput(logsOutput) || Boolean(agentStatus.completed);
+  void options;
+  const available = Boolean(job.resultAuthoritativeAt && job.resultState === "available");
   return {
     checkedAt: new Date().toISOString(),
     jobId: job.id,
-    claudeSessionId: job.claudeSessionId,
-    active: !completed && (logs.status === 0 || Boolean(agentStatus.active)),
-    completed,
-    available: logs.status === 0 || agents.status === 0,
-    logs: {
-      available: logs.status === 0,
-      output: logsOutput.trim(),
-      meaningfulOutput: meaningfulLogLines.join("\n")
-    },
-    agents: {
-      available: agents.status === 0,
-      output: agentStatus.output || agentsOutput.trim(),
-      match: agentStatus.match || null
-    }
+    lifecycleId: job.lifecycleId || null,
+    resumeSessionId: job.resumeSessionId || null,
+    lifecycleState: available ? "completed" : "interrupted",
+    active: false,
+    completed: available,
+    available,
+    result: available
+      ? { state: "available", result: job.result, source: job.resultSource || "legacy-authoritative" }
+      : { state: "unavailable", reason: "legacy-lifecycle-unsupported" },
+    logs: { available: false, output: "", meaningfulOutput: "" },
+    error: available ? null : "Legacy live lifecycle recovery is unsupported."
   };
 }
 
@@ -676,20 +968,24 @@ function summarizeLiveStatus(snapshot, monitorState = {}, options = {}) {
   const staleForMs = isRepeatedMeaningfulOutput ? Math.max(0, nowMs - changedAtMs) : 0;
   const stale = Boolean(snapshot.active && fingerprint && isRepeatedMeaningfulOutput && staleForMs >= staleAfterMs);
   const lastMeaningfulLine = meaningfulLines.at(-1) || null;
-  let state = snapshot.active ? "active" : "inactive";
-  if (!snapshot.available) {
-    state = "unavailable";
-  } else if (stale) {
+  let state = snapshot.lifecycleState || (snapshot.active ? "active" : "unknown");
+  if (stale) {
     state = "stale";
   }
 
-  let suggestedAction = "Check the job result or cancel it.";
+  let suggestedAction = "Inspect the explicit lifecycle and result state.";
   if (state === "active") {
-    suggestedAction = "Wait or keep monitoring.";
+    suggestedAction = snapshot.result?.state === "available"
+      ? "The final result is captured. Stop the still-active background session or keep monitoring it to a structured terminal state."
+      : "Wait or keep monitoring.";
   } else if (state === "stale") {
     suggestedAction = "Claude may be stalled. Continue monitoring, inspect logs, or cancel the job.";
   } else if (state === "unavailable") {
     suggestedAction = "Check whether Claude Code is installed and the background session still exists.";
+  } else if (state === "ambiguous") {
+    suggestedAction = "Resolve the duplicate structured session match before monitoring or resuming.";
+  } else if (state === "completed" && snapshot.result?.state !== "available") {
+    suggestedAction = "The job completed, but its final answer is unavailable or ambiguous. Inspect diagnostics; do not treat progress as the result.";
   }
 
   return {
@@ -711,21 +1007,44 @@ function persistMonitorSnapshot(ctx, job, snapshot) {
   const meaningfulOutput = String(snapshot.logs?.meaningfulOutput || "").trim();
   const patch = {
     lastMonitoredAt: snapshot.checkedAt,
+    lifecycleState: snapshot.lifecycleState,
+    lifecycleId: snapshot.lifecycleId || job.lifecycleId || job.claudeSessionId || null,
+    claudeSessionId: snapshot.lifecycleId || job.lifecycleId || job.claudeSessionId || null,
+    resumeSessionId: snapshot.resumeSessionId || job.resumeSessionId || null,
     lastMonitorSnapshot: {
       checkedAt: snapshot.checkedAt,
       active: snapshot.active,
       available: snapshot.available,
-      summary,
+      lifecycleState: snapshot.lifecycleState,
+      resultState: snapshot.result?.state || "unavailable",
+      summary: {
+        ...summary,
+        lastMeaningfulLine: summary.lastMeaningfulLine ? "[progress available]" : null
+      },
       logsAvailable: Boolean(snapshot.logs?.available),
       agentsAvailable: Boolean(snapshot.agents?.available)
     }
   };
-  if (snapshot.completed) {
-    patch.status = "completed";
-  }
+  const statusByLifecycle = {
+    active: "running",
+    completed: "completed",
+    cancelled: "cancelled",
+    unavailable: "unavailable",
+    ambiguous: "ambiguous",
+    unknown: "unknown"
+  };
+  patch.status = statusByLifecycle[snapshot.lifecycleState] || job.status;
   if (meaningfulOutput) {
-    patch.lastMeaningfulOutput = meaningfulOutput;
-    patch.result = meaningfulOutput;
+    patch.progressObservedAt = snapshot.checkedAt;
+  }
+  if (snapshot.completed || snapshot.result?.state === "available") {
+    patch.resultState = snapshot.result?.state || "unavailable";
+    patch.resultDiagnostic = snapshot.result?.reason || null;
+    if (snapshot.result?.state === "available") {
+      patch.result = snapshot.result.result;
+      patch.resultSource = snapshot.result.source;
+      patch.resultAuthoritativeAt = job.resultAuthoritativeAt || snapshot.checkedAt;
+    }
   }
   return completeJob(ctx, job, patch);
 }
@@ -742,8 +1061,8 @@ function renderMonitorSnapshot(snapshot) {
     lines.push(`Last meaningful output: ${summary.lastMeaningfulLine}`);
   } else if (snapshot.logs?.output) {
     lines.push("Recent logs contained only Claude status output.");
-  } else if (snapshot.agents?.output) {
-    lines.push(snapshot.agents.output);
+  } else if (snapshot.agents?.error) {
+    lines.push(snapshot.agents.error);
   }
   if (summary.stale) {
     lines.push(`No new meaningful output for ${summary.staleFor}.`);
@@ -756,82 +1075,219 @@ function writeMonitorSnapshot(snapshot, asJson) {
   process.stdout.write(asJson ? `${JSON.stringify(snapshot)}\n` : renderMonitorSnapshot(snapshot));
 }
 
-function handleMonitor(argv) {
+function managedSnapshot(job) {
+  const terminal = ["completed", "cancelled", "failed", "interrupted"].includes(job.lifecycleState);
+  return {
+    checkedAt: new Date().toISOString(),
+    jobId: job.id,
+    lifecycleId: job.lifecycleId,
+    lifecycleState: job.lifecycleState,
+    active: !terminal,
+    completed: job.lifecycleState === "completed",
+    available: true,
+    result: job.resultState === "available"
+      ? { state: "available", source: "provider-json", result: job.result }
+      : { state: "unavailable", reason: job.failureClassification || "result-pending" },
+    logs: { available: false, output: "", meaningfulOutput: "" },
+    summary: {
+      state: job.lifecycleState,
+      active: !terminal,
+      lastMeaningfulLine: null,
+      stale: false,
+      staleForMs: 0,
+      staleFor: "0s",
+      suggestedAction: terminal ? "Inspect the immutable terminal result." : "Wait or keep monitoring."
+    }
+  };
+}
+
+async function reconcileSupervisedJob(ctx, job) {
+  if (["completed", "cancelled", "failed", "interrupted"].includes(job.lifecycleState)) return job;
+  const first = await sendSupervisorCommand(ctx, job, "ping", 500);
+  if (first.ok) return job;
+  await new Promise((resolve) => setTimeout(resolve, 100));
+  ctx.state = loadState(ctx.stateDir, { pathBoundary: ctx.stateRoot });
+  const refreshed = ctx.state.jobs.find((item) => item.id === job.id) || job;
+  if (["completed", "cancelled", "failed", "interrupted"].includes(refreshed.lifecycleState)) return refreshed;
+  const second = await sendSupervisorCommand(ctx, refreshed, "ping", 500);
+  if (second.ok) return refreshed;
+  return transitionManaged(ctx, refreshed.id, {
+    expectedStates: ["starting", "running", "cancelling"],
+    toState: "interrupted",
+    patch: {
+      failureClassification: "interrupted-supervisor",
+      cleanupStatus: "failed",
+      terminalAt: new Date().toISOString()
+    }
+  }).job;
+}
+
+async function handleMonitor(argv) {
   const { options, positionals } = parseArgs(argv);
   const ctx = currentContext(options);
   let job = findJob(ctx, positionals[0]);
   if (!job) {
     throw new Error("No Claude job found.");
   }
+  if (options.forever) {
+    throw new Error("Unbounded --forever monitoring is not supported. Use a finite --max-checks value.");
+  }
   const intervalMs = Number(options["interval-ms"] || DEFAULT_MONITOR_INTERVAL_MS);
-  const maxChecks = options.forever ? Infinity : Number(options["max-checks"] || DEFAULT_MONITOR_CHECKS);
-  const monitorState = {};
-  for (let index = 0; index < maxChecks; index += 1) {
-    const snapshot = summarizeLiveStatus(readLiveStatus(job, options), monitorState, options);
-    job = persistMonitorSnapshot(ctx, job, snapshot);
-    writeMonitorSnapshot(snapshot, options.json);
-    if (!snapshot.active) {
-      break;
-    }
-    if (index < maxChecks - 1) {
-      sleep(intervalMs);
-    }
+  const maxChecks = Number(options["max-checks"] || DEFAULT_MONITOR_CHECKS);
+  if (!Number.isFinite(intervalMs) || intervalMs < 0 || intervalMs > MAX_MONITOR_INTERVAL_MS) {
+    throw new Error(`--interval-ms must be between 0 and ${MAX_MONITOR_INTERVAL_MS}.`);
   }
+  if (!Number.isInteger(maxChecks) || maxChecks < 1 || maxChecks > MAX_MONITOR_CHECKS) {
+    throw new Error(`--max-checks must be an integer between 1 and ${MAX_MONITOR_CHECKS}.`);
+  }
+  if (isSupervisedJob(job)) {
+    for (let index = 0; index < maxChecks; index += 1) {
+      job = await reconcileSupervisedJob(ctx, job);
+      const snapshot = managedSnapshot(job);
+      writeMonitorSnapshot(snapshot, options.json);
+      if (!snapshot.active) break;
+      if (index < maxChecks - 1) await new Promise((resolve) => setTimeout(resolve, intervalMs));
+      ctx.state = loadState(ctx.stateDir, { pathBoundary: ctx.stateRoot });
+      job = ctx.state.jobs.find((item) => item.id === job.id) || job;
+    }
+    return;
+  }
+  const legacyAvailable = Boolean(job.resultAuthoritativeAt && job.resultState === "available");
+  writeMonitorSnapshot({
+    checkedAt: new Date().toISOString(),
+    jobId: job.id,
+    lifecycleState: legacyAvailable ? "completed" : "interrupted",
+    active: false,
+    completed: legacyAvailable,
+    available: legacyAvailable,
+    result: legacyAvailable
+      ? { state: "available", result: job.result, source: job.resultSource || "legacy-authoritative" }
+      : { state: "unavailable", reason: "legacy-lifecycle-unsupported" },
+    logs: { available: false, output: "", meaningfulOutput: "" },
+    summary: {
+      state: legacyAvailable ? "completed" : "interrupted",
+      active: false,
+      lastMeaningfulLine: null,
+      stale: false,
+      staleForMs: 0,
+      staleFor: "0s",
+      suggestedAction: "Legacy terminal logs are not re-read."
+    }
+  }, options.json);
 }
 
-function handleStatus(argv) {
+async function handleStatus(argv) {
   const { options, positionals } = parseArgs(argv);
   const ctx = currentContext(options);
-  const job = findJob(ctx, positionals[0]);
+  const reference = positionals[0];
+  const job = findJob(ctx, reference);
   if (options.watch || options.follow) {
-    handleMonitor(argv);
+    await handleMonitor(argv);
     return;
+  }
+  if (reference && !job) {
+    throw new Error("No Claude job found for that lifecycle reference. Use the exact managed job ID or lifecycle ID.");
   }
   if (!job) {
-    output({ jobs: ctx.state.jobs }, options.json);
+    output({ jobs: ctx.state.jobs.map(publicJob) }, options.json);
     return;
   }
-  const live = job.claudeSessionId ? summarizeLiveStatus(readLiveStatus(job, options), {}, options) : null;
-  const updated = live ? persistMonitorSnapshot(ctx, job, live) : job;
-  output({ job: updated, live }, options.json);
+  if (isSupervisedJob(job)) {
+    const updated = await reconcileSupervisedJob(ctx, job);
+    output({ job: publicJob(updated), live: managedSnapshot(updated) }, options.json);
+    return;
+  }
+  const legacyAvailable = Boolean(job.resultAuthoritativeAt && job.resultState === "available");
+  output({
+    job,
+    live: {
+      lifecycleState: legacyAvailable ? "completed" : "interrupted",
+      result: legacyAvailable
+        ? { state: "available", result: job.result, source: job.resultSource || "legacy-authoritative" }
+        : { state: "unavailable", reason: "legacy-lifecycle-unsupported" }
+    }
+  }, options.json);
 }
 
-function handleResult(argv) {
+async function handleResult(argv) {
+  const { options, positionals } = parseArgs(argv);
+  const ctx = currentContext(options);
+  let job = findJob(ctx, positionals[0]);
+  if (!job) {
+    throw new Error("No Claude job found.");
+  }
+  if (isSupervisedJob(job)) {
+    job = await reconcileSupervisedJob(ctx, job);
+    const available = job.lifecycleState === "completed" && job.resultState === "available";
+    output({
+      job: publicJob(job),
+      resultState: available ? "available" : "unavailable",
+      result: available ? job.result : null,
+      diagnostic: available ? null : job.failureClassification || "No authoritative final assistant answer is available."
+    }, options.json);
+    return;
+  }
+  const isBackground = Boolean(job.lifecycleId || job.claudeSessionId || job.sessionName || job.status === "launch_uncertain");
+  const available = isBackground
+    ? Boolean(job.resultAuthoritativeAt && job.resultState === "available")
+    : job.status === "completed";
+  output(
+    {
+      job,
+      resultState: available ? "available" : job.resultState || "unavailable",
+      result: available ? job.result ?? "" : null,
+      diagnostic: available ? null : job.resultDiagnostic || "No authoritative final assistant answer is available."
+    },
+    options.json
+  );
+}
+
+async function handleCancel(argv) {
   const { options, positionals } = parseArgs(argv);
   const ctx = currentContext(options);
   const job = findJob(ctx, positionals[0]);
   if (!job) {
     throw new Error("No Claude job found.");
   }
-  output({ job, result: job.result ?? job.stdout ?? "" }, options.json);
-}
-
-function handleCancel(argv) {
-  const { options, positionals } = parseArgs(argv);
-  const ctx = currentContext(options);
-  const job = findJob(ctx, positionals[0]);
-  if (!job) {
-    throw new Error("No Claude job found.");
-  }
-  let latest = job;
-  if (job.claudeSessionId) {
-    try {
-      const live = summarizeLiveStatus(readLiveStatus(job, options), {}, options);
-      latest = persistMonitorSnapshot(ctx, job, live);
-      if (live.completed) {
-        output({ jobId: latest.id, status: "completed" }, options.json);
+  if (isSupervisedJob(job)) {
+    if (["completed", "cancelled", "failed", "interrupted"].includes(job.lifecycleState)) {
+      const terminalDeadline = Date.now() + boundedPositiveInteger(options["timeout-ms"], 10000, 100, 30000);
+      let terminalJob = job;
+      while (terminalJob.cleanupStatus === "pending" && Date.now() < terminalDeadline) {
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        ctx.state = loadState(ctx.stateDir, { pathBoundary: ctx.stateRoot });
+        terminalJob = ctx.state.jobs.find((item) => item.id === job.id) || terminalJob;
+      }
+      if (terminalJob.cleanupStatus === "pending") {
+        throw new Error("Claude cleanup did not reach a verified terminal status.");
+      }
+      output({ jobId: terminalJob.id, status: terminalJob.lifecycleState }, options.json);
+      return;
+    }
+    const timeoutMs = boundedPositiveInteger(options["timeout-ms"], 10000, 100, 30000);
+    const requested = await sendSupervisorCommand(ctx, job, "cancel", Math.min(timeoutMs, 6000));
+    if (!requested.ok) {
+      const interrupted = await reconcileSupervisedJob(ctx, job);
+      output({ jobId: interrupted.id, status: interrupted.lifecycleState }, options.json);
+      return;
+    }
+    const deadline = Date.now() + timeoutMs;
+    let current = job;
+    while (Date.now() < deadline) {
+      ctx.state = loadState(ctx.stateDir, { pathBoundary: ctx.stateRoot });
+      current = ctx.state.jobs.find((item) => item.id === job.id) || current;
+      if (
+        ["completed", "cancelled", "failed", "interrupted"].includes(current.lifecycleState) &&
+        current.cleanupStatus !== "pending"
+      ) {
+        output({ jobId: current.id, status: current.lifecycleState }, options.json);
         return;
       }
-    } catch {
-      latest = job;
+      await new Promise((resolve) => setTimeout(resolve, 20));
     }
-    const stopped = runClaude(["stop", job.claudeSessionId], { timeoutMs: Number(options["timeout-ms"] || 10000) });
-    if (stopped.status !== 0) {
-      throw new Error(stopped.stderr || stopped.stdout || `Claude failed to stop session ${job.claudeSessionId}.`);
-    }
+    throw new Error("Claude cancellation did not reach a verified terminal state.");
   }
-  const cancelled = completeJob(ctx, latest, { status: "cancelled" });
-  output({ jobId: cancelled.id, status: "cancelled" }, options.json);
+  output({ jobId: job.id, status: job.resultAuthoritativeAt ? "completed" : "interrupted" }, options.json);
 }
 
 function handleResumeCandidate(argv) {
@@ -841,10 +1297,14 @@ function handleResumeCandidate(argv) {
   try {
     candidate = selectResumeCandidate(ctx.state.jobs, process.env, { resume: true, write: Boolean(options.write) });
   } catch (error) {
-    output({ available: false, error: error.message, candidates: ctx.state.jobs }, options.json);
+    output({ available: false, error: error.message, candidates: ctx.state.jobs.map(publicJob) }, options.json);
     return;
   }
-  output({ available: Boolean(candidate), candidate, candidates: candidate ? [] : ctx.state.jobs }, options.json);
+  output({
+    available: Boolean(candidate),
+    candidate: publicJob(candidate),
+    candidates: candidate ? [] : ctx.state.jobs.map(publicJob)
+  }, options.json);
 }
 
 function printUsage() {
@@ -877,31 +1337,31 @@ async function main() {
       handleSetup(argv);
       break;
     case "advise":
-      handleAdvise(argv);
+      await handleAdvise(argv);
       break;
     case "rescue":
-      handleRescue(argv);
+      await handleRescue(argv);
       break;
     case "do":
-      handleDo(argv);
+      await handleDo(argv);
       break;
     case "review":
-      handleReview(argv, "review");
+      await handleReview(argv, "review");
       break;
     case "adversarial-review":
-      handleReview(argv, "adversarial-review");
+      await handleReview(argv, "adversarial-review");
       break;
     case "status":
-      handleStatus(argv);
+      await handleStatus(argv);
       break;
     case "monitor":
-      handleMonitor(argv);
+      await handleMonitor(argv);
       break;
     case "result":
-      handleResult(argv);
+      await handleResult(argv);
       break;
     case "cancel":
-      handleCancel(argv);
+      await handleCancel(argv);
       break;
     case "resume-candidate":
       handleResumeCandidate(argv);
