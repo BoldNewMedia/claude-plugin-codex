@@ -1,0 +1,134 @@
+name: Alpha test report
+description: Report a pass, failure or inconclusive v0.1.15 install and first review
+title: "[Alpha test]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this form for one v0.1.15 alpha test on public or otherwise non-sensitive code.
+
+        Do not report security vulnerabilities here. Follow [SECURITY.md](https://github.com/BoldNewMedia/claude-plugin-codex/security/policy) and keep vulnerability details out of public issues.
+  - type: input
+    id: operating_system
+    attributes:
+      label: Operating system
+      description: Include the operating system name and version.
+      placeholder: macOS 15.6, Ubuntu 24.04 or Windows 11 24H2
+    validations:
+      required: true
+  - type: dropdown
+    id: runtime_environment
+    attributes:
+      label: Runtime environment
+      description: Distinguish native Windows from Windows Subsystem for Linux.
+      options:
+        - Native macOS
+        - Native Linux
+        - Native Windows
+        - Windows Subsystem for Linux 1
+        - Windows Subsystem for Linux 2
+        - Other virtual machine or container
+    validations:
+      required: true
+  - type: input
+    id: architecture
+    attributes:
+      label: Architecture
+      placeholder: arm64, x86_64 or Windows x64
+    validations:
+      required: true
+  - type: textarea
+    id: tool_versions
+    attributes:
+      label: Tool versions
+      description: Provide the Codex, Claude Code and Node.js versions.
+      placeholder: |
+        Codex: x.y.z
+        Claude Code: x.y.z
+        Node.js: x.y.z
+    validations:
+      required: true
+  - type: dropdown
+    id: install_outcome
+    attributes:
+      label: Install outcome
+      options:
+        - Pass
+        - Failure
+        - Inconclusive
+        - Not reached
+    validations:
+      required: true
+  - type: dropdown
+    id: setup_outcome
+    attributes:
+      label: Setup outcome
+      description: Result of `$claude setup` in a new Codex task.
+      options:
+        - Pass
+        - Failure
+        - Inconclusive
+        - Not reached
+    validations:
+      required: true
+  - type: dropdown
+    id: review_outcome
+    attributes:
+      label: Review outcome
+      description: Result of one foreground `$claude review` on public or otherwise non-sensitive code.
+      options:
+        - Pass
+        - Failure
+        - Inconclusive
+        - Not reached
+    validations:
+      required: true
+  - type: dropdown
+    id: overall_outcome
+    attributes:
+      label: Overall outcome
+      description: Select the result of the complete test after recording each stage above.
+      options:
+        - Pass
+        - Failure
+        - Inconclusive
+    validations:
+      required: true
+  - type: input
+    id: elapsed_time
+    attributes:
+      label: Elapsed time
+      description: Approximate minutes from starting installation to the first review result or stopping point.
+      placeholder: 8 minutes
+    validations:
+      required: true
+  - type: textarea
+    id: sanitised_evidence
+    attributes:
+      label: Sanitised evidence
+      description: For a failure or inconclusive result, give the smallest reproducible symptom, safe reproduction steps, and expected and observed behaviour. For a pass, write "No symptoms". Do not paste a full log.
+      placeholder: |
+        Smallest reproducible symptom:
+        Safe reproduction steps:
+        Expected behaviour:
+        Observed behaviour:
+    validations:
+      required: true
+  - type: textarea
+    id: usefulness
+    attributes:
+      label: Usefulness notes
+      description: Optional. Did the review find, confirm or change an engineering decision?
+    validations:
+      required: false
+  - type: checkboxes
+    id: safety_checks
+    attributes:
+      label: Safety confirmation
+      options:
+        - label: I tested v0.1.15 using a read-only review on public or otherwise non-sensitive code.
+          required: true
+        - label: This report and its attachments contain no credentials, tokens, cookies, session data, private source code, private prompts, personal information or full unsanitised logs.
+          required: true
+        - label: This is not a security vulnerability. I will follow SECURITY.md for vulnerabilities and will not post vulnerability details publicly.
+          required: true

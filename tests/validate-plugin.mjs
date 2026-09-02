@@ -6,6 +6,9 @@ const marketplace = JSON.parse(fs.readFileSync(".agents/plugins/marketplace.json
 const packageJson = JSON.parse(fs.readFileSync("package.json", "utf8"));
 const skill = fs.readFileSync("plugins/claude-code-advisor/skills/claude/SKILL.md", "utf8");
 const readme = fs.readFileSync("README.md", "utf8");
+const alphaGuide = fs.readFileSync("docs/alpha-testing.md", "utf8");
+const alphaReport = fs.readFileSync(".github/ISSUE_TEMPLATE/alpha_test_report.yml", "utf8");
+const issueConfig = fs.readFileSync(".github/ISSUE_TEMPLATE/config.yml", "utf8");
 const commands = fs.readFileSync("docs/commands.md", "utf8");
 const e2e = fs.readFileSync("tests/e2e-codex-skill.mjs", "utf8");
 const smoke = fs.readFileSync("tests/smoke-installed-tools.mjs", "utf8");
@@ -46,7 +49,9 @@ for (const publicPath of [
   "docs/commands.md",
   "docs/assets/social-preview.png",
   "docs/assets/claude-code-advisor-demo.png",
+  ".github/ISSUE_TEMPLATE/alpha_test_report.yml",
   ".github/ISSUE_TEMPLATE/bug_report.yml",
+  ".github/ISSUE_TEMPLATE/config.yml",
   ".github/ISSUE_TEMPLATE/feature_request.yml",
   ".github/pull_request_template.md",
 ]) {
@@ -96,6 +101,28 @@ assert.match(readme, /Malformed JSON and unsupported schema/);
 assert.match(readme, /diff exceeds 1 MiB/);
 assert.match(readme, /Supervised background mode currently requires macOS/);
 assert.match(readme, /Abrupt supervisor `SIGKILL`/);
+const alphaReportUrl = "https://github.com/BoldNewMedia/claude-plugin-codex/issues/new?template=alpha_test_report.yml";
+assert.ok(readme.includes(alphaReportUrl));
+assert.ok(alphaGuide.includes(alphaReportUrl));
+assert.match(readme, /Authenticated Claude execution and installed Codex routing were\s+not rerun at that exact commit/);
+assert.match(alphaGuide, /three independent testers/);
+assert.match(alphaGuide, /native Windows/);
+assert.match(alphaGuide, /WSL/);
+assert.match(alphaGuide, /10 external installations/);
+assert.doesNotMatch(alphaGuide, /bug form or the alpha feedback issue/);
+assert.match(alphaReport, /- Pass\n/);
+assert.match(alphaReport, /- Failure\n/);
+assert.match(alphaReport, /- Inconclusive\n/);
+assert.match(alphaReport, /id: install_outcome/);
+assert.match(alphaReport, /id: setup_outcome/);
+assert.match(alphaReport, /id: review_outcome/);
+assert.ok(
+  alphaReport.indexOf("id: overall_outcome") > alphaReport.indexOf("id: review_outcome"),
+  "overall outcome must follow the stage outcomes"
+);
+assert.doesNotMatch(alphaReport, /Outcome stage:/);
+assert.match(alphaReport, /credentials, tokens, cookies, session data, private source code, private prompts, personal information or full unsanitised logs/);
+assert.match(issueConfig, /blank_issues_enabled: true/);
 assert.match(commands, /Resume uses only a canonical full Claude session UUID/);
 assert.match(commands, /exactly one schema-valid UTF-8 JSON document/);
 assert.match(commands, /complete diff exceeds 1 MiB/);

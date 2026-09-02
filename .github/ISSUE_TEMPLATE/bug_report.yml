@@ -17,7 +17,7 @@ body:
           required: true
         - label: I tested the latest release and started a new Codex thread or restarted Codex.
           required: true
-        - label: This report contains no credentials, tokens, cookies, session data, private source code or personal information.
+        - label: This report contains no credentials, tokens, cookies, session data, private source code, private prompts, personal information or full unsanitised logs.
           required: true
         - label: This is not a security vulnerability.
           required: true
@@ -25,7 +25,7 @@ body:
     id: plugin-version
     attributes:
       label: Plugin version
-      placeholder: 0.1.14 or commit SHA
+      placeholder: 0.1.15 or commit SHA
     validations:
       required: true
   - type: input

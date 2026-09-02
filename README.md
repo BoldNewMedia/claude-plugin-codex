@@ -78,21 +78,30 @@ Alpha. Use it on real work only with normal review and source-control controls.
 The stable command form is `$claude`. If your Codex UI exposes the skill as
 `/claude`, you can use that as an alias.
 
+Current public release: [`v0.1.15`](https://github.com/BoldNewMedia/claude-plugin-codex/releases/tag/v0.1.15).
+
 | Component | Verified status |
 |---|---|
-| Codex CLI | Marketplace and end-to-end routing verified with `0.130.0` |
-| Claude Code CLI | Capability detection verified with `2.1.201`; an authenticated local account is required |
-| Node.js | Automated tests run on 20, 22 and 24; runtime minimum is 18.18 |
-| macOS | Live local workflow verified |
-| Linux | Deterministic tests and metadata validation run in GitHub Actions |
-| Windows | Not yet independently verified; tester reports are welcome |
+| Codex CLI | Marketplace commands confirmed with `0.147.0`; installed routing was previously verified with `0.130.0` |
+| Claude Code CLI | Unauthenticated `v0.1.15` smoke passed with `2.1.234`; an authenticated local account is required for a real review |
+| Node.js | Exact-release CI passed on 20, 22 and 24; runtime minimum is 18.18 |
+| macOS | Deterministic coverage and supervised background support exist; an independent exact-release report is still needed |
+| Linux | Exact-release CI and deterministic coverage exist; an independent foreground report is still needed |
+| WSL | Not yet independently verified; it is recorded separately from native Windows |
+| Native Windows | Not yet independently verified; supervised background mode is unavailable |
 
-Before beta, the project needs repeatable external installation results on
-macOS, Linux and Windows. Supervised background mode is currently proved only
-on macOS; other platforms fail closed to foreground operation.
+Deterministic tests and Node.js 20, 22 and 24 CI passed at the `v0.1.15`
+release commit. Authenticated Claude execution and installed Codex routing were
+not rerun at that exact commit. The immediate three-person pilot is intended to
+close that specific evidence gap with one report each from native Windows,
+Linux and macOS. A WSL report is useful but does not replace native Windows.
 
-See the [alpha testing guide](docs/alpha-testing.md) to join the initial
-compatibility cohort. Windows and Linux reports are particularly useful.
+Already use Codex and authenticated Claude Code? Install `v0.1.15`, run
+`$claude setup`, run one foreground `$claude review` on public or otherwise
+non-sensitive code, then submit the
+[structured alpha test report](https://github.com/BoldNewMedia/claude-plugin-codex/issues/new?template=alpha_test_report.yml).
+See the [alpha testing guide](docs/alpha-testing.md) for the complete test and
+the separate beta exit criteria.
 
 ## Core Commands
 

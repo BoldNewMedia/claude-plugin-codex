@@ -1,0 +1,3 @@
+# SECURITY.md uses blank issues for content-free private-channel requests when
+# GitHub private vulnerability reporting is unavailable.
+blank_issues_enabled: true
