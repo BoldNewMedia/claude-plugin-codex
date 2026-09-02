@@ -8,6 +8,7 @@ const skill = fs.readFileSync("plugins/claude-code-advisor/skills/claude/SKILL.m
 const readme = fs.readFileSync("README.md", "utf8");
 const alphaGuide = fs.readFileSync("docs/alpha-testing.md", "utf8");
 const alphaReport = fs.readFileSync(".github/ISSUE_TEMPLATE/alpha_test_report.yml", "utf8");
+const bugReport = fs.readFileSync(".github/ISSUE_TEMPLATE/bug_report.yml", "utf8");
 const issueConfig = fs.readFileSync(".github/ISSUE_TEMPLATE/config.yml", "utf8");
 const commands = fs.readFileSync("docs/commands.md", "utf8");
 const e2e = fs.readFileSync("tests/e2e-codex-skill.mjs", "utf8");
@@ -108,6 +109,8 @@ assert.match(readme, /Authenticated Claude execution and installed Codex routing
 assert.match(alphaGuide, /three independent testers/);
 assert.match(alphaGuide, /native Windows/);
 assert.match(alphaGuide, /WSL/);
+assert.match(alphaGuide, /15–20-minute test/);
+assert.match(alphaGuide, /public, disposable or otherwise non-sensitive Git repository/);
 assert.match(alphaGuide, /10 external installations/);
 assert.doesNotMatch(alphaGuide, /bug form or the alpha feedback issue/);
 assert.match(alphaReport, /- Pass\n/);
@@ -121,8 +124,13 @@ assert.ok(
   "overall outcome must follow the stage outcomes"
 );
 assert.doesNotMatch(alphaReport, /Outcome stage:/);
-assert.match(alphaReport, /credentials, tokens, cookies, session data, private source code, private prompts, personal information or full unsanitised logs/);
+assert.match(alphaReport, /technically successful review that was not useful is equally welcome/);
+assert.match(alphaReport, /fixed test should take about 15–20 minutes/);
+assert.match(alphaReport, /public, disposable or otherwise non-sensitive repository/);
+assert.match(alphaReport, /confidential or private source code, credentials, tokens, cookies, session data, private prompts, personal information, unredacted screenshots or full unsanitised logs/);
+assert.match(bugReport, /confidential or private source code, credentials, tokens, cookies, session data, private prompts, personal information, unredacted screenshots or full unsanitised logs/);
 assert.match(issueConfig, /blank_issues_enabled: true/);
+assert.match(issueConfig, /alpha_test_report\.yml is the sole alpha-test reporting route/);
 assert.match(commands, /Resume uses only a canonical full Claude session UUID/);
 assert.match(commands, /exactly one schema-valid UTF-8 JSON document/);
 assert.match(commands, /complete diff exceeds 1 MiB/);

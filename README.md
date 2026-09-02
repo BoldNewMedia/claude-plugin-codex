@@ -97,8 +97,8 @@ close that specific evidence gap with one report each from native Windows,
 Linux and macOS. A WSL report is useful but does not replace native Windows.
 
 Already use Codex and authenticated Claude Code? Install `v0.1.15`, run
-`$claude setup`, run one foreground `$claude review` on public or otherwise
-non-sensitive code, then submit the
+`$claude setup`, run one foreground `$claude review` in a public, disposable or
+otherwise non-sensitive repository, then submit the
 [structured alpha test report](https://github.com/BoldNewMedia/claude-plugin-codex/issues/new?template=alpha_test_report.yml).
 See the [alpha testing guide](docs/alpha-testing.md) for the complete test and
 the separate beta exit criteria.

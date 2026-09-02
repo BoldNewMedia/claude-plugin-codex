@@ -1,3 +1,4 @@
-# SECURITY.md uses blank issues for content-free private-channel requests when
-# GitHub private vulnerability reporting is unavailable.
+# alpha_test_report.yml is the sole alpha-test reporting route. SECURITY.md
+# uses blank issues only for content-free private-channel requests when GitHub
+# private vulnerability reporting is unavailable.
 blank_issues_enabled: true

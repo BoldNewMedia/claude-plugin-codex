@@ -5,7 +5,9 @@ body:
   - type: markdown
     attributes:
       value: |
-        Use this form for one v0.1.15 alpha test on public or otherwise non-sensitive code.
+        Use this form for one v0.1.15 alpha test in a public, disposable or otherwise non-sensitive repository.
+
+        The fixed test should take about 15–20 minutes.
 
         Do not report security vulnerabilities here. Follow [SECURITY.md](https://github.com/BoldNewMedia/claude-plugin-codex/security/policy) and keep vulnerability details out of public issues.
   - type: input
@@ -118,7 +120,7 @@ body:
     id: usefulness
     attributes:
       label: Usefulness notes
-      description: Optional. Did the review find, confirm or change an engineering decision?
+      description: Optional. Did the review find, confirm or change an engineering decision? A technically successful review that was not useful is equally welcome.
     validations:
       required: false
   - type: checkboxes
@@ -126,9 +128,9 @@ body:
     attributes:
       label: Safety confirmation
       options:
-        - label: I tested v0.1.15 using a read-only review on public or otherwise non-sensitive code.
+        - label: I tested v0.1.15 using a read-only review in a public, disposable or otherwise non-sensitive repository.
           required: true
-        - label: This report and its attachments contain no credentials, tokens, cookies, session data, private source code, private prompts, personal information or full unsanitised logs.
+        - label: This report and its attachments contain no confidential or private source code, credentials, tokens, cookies, session data, private prompts, personal information, unredacted screenshots or full unsanitised logs.
           required: true
         - label: This is not a security vulnerability. I will follow SECURITY.md for vulnerabilities and will not post vulnerability details publicly.
           required: true

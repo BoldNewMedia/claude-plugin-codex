@@ -32,14 +32,15 @@ The first tester can begin immediately. The ten-installation threshold below
 is a beta exit criterion, not a prerequisite for recruiting or submitting the
 first report.
 
-## Fifteen-minute test
+## 15–20-minute test
 
 1. Install `v0.1.15` using the marketplace and plugin commands in the
    [README](../README.md).
 2. Start a new Codex task.
 3. Run `$claude setup`.
-4. In a public or otherwise non-sensitive Git repository with a small tracked
-   or staged change and no untracked files, run one foreground `$claude review`.
+4. In a public, disposable or otherwise non-sensitive Git repository with a
+   small tracked or staged change and no untracked files, run one foreground
+   `$claude review`.
 5. Submit the
    [structured alpha test report](https://github.com/BoldNewMedia/claude-plugin-codex/issues/new?template=alpha_test_report.yml),
    whether the result passed, failed or was inconclusive.
@@ -62,10 +63,11 @@ Claude Code and Node.js versions, install, setup and review outcomes, elapsed
 time, the smallest reproducible sanitised symptom, and optional usefulness
 notes.
 
-Never provide credentials, tokens, cookies, session data, private source code,
-private prompts, personal information or full unsanitised logs. Do not use the
-alpha form for a security vulnerability. Follow [SECURITY.md](../SECURITY.md)
-and keep vulnerability details out of public issues.
+Never provide confidential or private source code, credentials, tokens,
+cookies, session data, private prompts, personal information, unredacted
+screenshots or full unsanitised logs. Do not use the alpha form for a security
+vulnerability. Follow [SECURITY.md](../SECURITY.md) and keep vulnerability
+details out of public issues.
 
 ## Beta exit criteria
 

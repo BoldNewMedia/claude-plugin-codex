@@ -17,7 +17,7 @@ body:
           required: true
         - label: I tested the latest release and started a new Codex thread or restarted Codex.
           required: true
-        - label: This report contains no credentials, tokens, cookies, session data, private source code, private prompts, personal information or full unsanitised logs.
+        - label: This report contains no confidential or private source code, credentials, tokens, cookies, session data, private prompts, personal information, unredacted screenshots or full unsanitised logs.
           required: true
         - label: This is not a security vulnerability.
           required: true
