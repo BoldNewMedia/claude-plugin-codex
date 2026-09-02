@@ -11,6 +11,8 @@ best-effort basis through GitHub issues.
 4. Run `$claude setup` and check whether it identifies the problem.
 5. Search existing issues for the same symptom.
 
+For alpha installation and first-review outcomes, use the
+[alpha test report](https://github.com/BoldNewMedia/claude-plugin-codex/issues/new?template=alpha_test_report.yml).
 For reproducible plugin bugs, use the bug report issue form. For proposals, use
 the feature request form.
 
