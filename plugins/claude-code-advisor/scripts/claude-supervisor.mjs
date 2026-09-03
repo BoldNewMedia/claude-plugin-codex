@@ -7,6 +7,7 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 
 import {
+  classifySupervisorFailureEvent,
   supervisorPaths,
   transitionSupervisedJob,
   updateSupervisedCleanup,
@@ -19,6 +20,7 @@ const GROUP_VERIFY_MS = 1000;
 const GROUP_TERM_GRACE_MS = 500;
 const CONTROL_CLOSE_MS = 1000;
 const PROVIDER_START_TIMEOUT_MS = 5000;
+const WORKER_EXIT_DETAIL_GRACE_MS = 25;
 const groupWorkerScript = fileURLToPath(new URL("./claude-group-worker.mjs", import.meta.url));
 
 function delay(ms) {
@@ -299,7 +301,7 @@ async function main() {
         resolve();
       });
     });
-    controlServer.on("error", () => requestTermination("worker-failure"));
+    controlServer.on("error", () => requestTermination("control-socket-error"));
     if (interruptionRequested) throw new Error("supervisor-interrupted");
 
     child = spawn(process.execPath, [groupWorkerScript], {
@@ -338,14 +340,21 @@ async function main() {
     let resolveWorkerLoss;
     let providerOutcomeDelivered = false;
     const workerLossPromise = new Promise((resolve) => { resolveWorkerLoss = resolve; });
-    workerClosePromise.then((outcome) => {
-      if (!providerOutcomeDelivered) resolveWorkerLoss({ kind: "worker-exit", ...outcome });
-    });
+    const resolveDetailedWorkerLoss = async (fallback) => {
+      const exit = await Promise.race([
+        workerExitPromise,
+        delay(WORKER_EXIT_DETAIL_GRACE_MS).then(() => null)
+      ]);
+      await delay(0);
+      if (providerOutcomeDelivered) return;
+      resolveWorkerLoss(exit ? { kind: "worker-exit", ...exit } : fallback);
+    };
+    workerClosePromise.then((outcome) => resolveDetailedWorkerLoss({ kind: "worker-exit", ...outcome }));
     child.once("disconnect", () => {
-      if (!providerOutcomeDelivered) resolveWorkerLoss({ kind: "ipc-disconnect" });
+      if (!providerOutcomeDelivered) resolveDetailedWorkerLoss({ kind: "ipc-disconnect" });
     });
     child.stdin.on("error", () => {
-      if (!providerOutcomeDelivered) resolveWorkerLoss({ kind: "worker-stdin-error" });
+      if (!providerOutcomeDelivered) resolveDetailedWorkerLoss({ kind: "worker-stdin-error" });
     });
     let resolveProviderReady;
     let resolveProviderOutcome;
@@ -400,11 +409,7 @@ async function main() {
     ]);
     if (providerStart?.ok !== true) {
       if (!failureClassification) {
-        failureClassification = providerStart?.kind === "spawn-error"
-          ? "spawn-failure"
-          : providerStart?.kind === "supervisor-interruption"
-            ? "interrupted-supervisor"
-            : "worker-failure";
+        failureClassification = classifySupervisorFailureEvent(providerStart);
       }
       if (providerStart?.kind === "supervisor-interruption") interruptionRequested = true;
       const groupClean = await (requestTermination(failureClassification) || Promise.resolve(false));
@@ -466,9 +471,11 @@ async function main() {
       if (outcome.kind === "spawn-error" && !failureClassification) failureClassification = "spawn-failure";
       groupClean = await (ensureGroupTermination() || Promise.resolve(false));
     } else {
-      if (!failureClassification) failureClassification = completion.source === "worker"
-        ? "worker-failure"
-        : "interrupted-supervisor";
+      if (!failureClassification) {
+        failureClassification = completion.source === "worker"
+          ? classifySupervisorFailureEvent(completion.outcome)
+          : "interrupted-supervisor";
+      }
       if (completion.source === "interruption") interruptionRequested = true;
       groupClean = await (ensureGroupTermination() || Promise.resolve(false));
       outcome = { code: null, signal: completion.outcome.signal };

@@ -18,6 +18,8 @@ import {
   buildBackgroundResultPrompt,
   buildClaudeArgs,
   buildReviewPrompt,
+  classifySupervisorFailureEvent,
+  DEFAULT_BACKGROUND_TIMEOUT_MS,
   emptyState,
   isCanonicalResumeReference,
   loadState,
@@ -26,6 +28,7 @@ import {
   parseBackgroundResult,
   parseClaudeJsonResult,
   reconcileBackgroundIdentity,
+  resolveBackgroundFallbackTimeout,
   resolveStateDir,
   resolveResumeReference,
   saveState,
@@ -85,6 +88,48 @@ test("Codex E2E command and routed-output classifiers fail closed", () => {
   ]) {
     assert.equal(classifyRoutedOutput(unsafe), "unexpected", unsafe);
   }
+});
+
+test("foreground timeout fallback inherits the normal background deadline", () => {
+  assert.equal(DEFAULT_BACKGROUND_TIMEOUT_MS, 600_000);
+  assert.equal(resolveBackgroundFallbackTimeout({}), DEFAULT_BACKGROUND_TIMEOUT_MS);
+  assert.equal(resolveBackgroundFallbackTimeout({ "background-timeout-ms": "45000" }), "45000");
+  assert.equal(resolveBackgroundFallbackTimeout({ backgroundTimeoutMs: 90000 }), 90000);
+  assert.equal(
+    resolveBackgroundFallbackTimeout({ "background-timeout-ms": 0, backgroundTimeoutMs: 90000 }),
+    0,
+    "invalid explicit values must reach bounded validation instead of silently reverting to a default"
+  );
+});
+
+test("supervisor failure event classification is fixed, specific and non-disclosing", () => {
+  const sentinel = "SECRET stderr /private/path provider-output";
+  const cases = [
+    [{ kind: "start-timeout", stderr: sentinel }, "provider-start-timeout"],
+    [{ kind: "worker-exit", code: 9, signal: null, message: sentinel }, "worker-exit-code"],
+    [{ kind: "worker-exit", code: null, signal: "SIGKILL", stdout: sentinel }, "worker-exit-signal"],
+    [{ kind: "ipc-disconnect", prompt: sentinel }, "worker-ipc-disconnect"],
+    [{ kind: "worker-stdin-error", error: new Error(sentinel) }, "worker-stdin-error"],
+    [{ kind: "control-socket-error", diagnostic: sentinel }, "control-socket-error"],
+    [{ kind: "spawn-error", error: new Error(sentinel) }, "spawn-failure"],
+    [{ kind: "supervisor-interruption", reason: sentinel }, "interrupted-supervisor"],
+    [{ kind: "unknown", message: sentinel }, "worker-failure"]
+  ];
+
+  for (const [event, expected] of cases) {
+    const classification = classifySupervisorFailureEvent(event);
+    assert.equal(classification, expected);
+    assert.equal(classification.includes("SECRET"), false);
+    assert.equal(classification.includes("private"), false);
+  }
+  assert.equal(
+    classifySupervisorFailureEvent({ kind: "termination-request", classification: "timeout", message: sentinel }),
+    "timeout"
+  );
+  assert.equal(
+    classifySupervisorFailureEvent({ kind: "termination-request", classification: sentinel }),
+    "worker-failure"
+  );
 });
 
 test("resolveStateDir isolates state by workspace and Codex thread id", () => {

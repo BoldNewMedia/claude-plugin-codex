@@ -2,6 +2,14 @@
 
 All notable public changes to Claude Code Advisor for Codex are recorded here.
 
+## 0.1.16 - 2026-09-04
+
+- give an automatic foreground-timeout fallback the normal 10-minute
+  supervised background deadline instead of 30 seconds
+- retain fixed, non-disclosing supervisor failure classifications for known
+  worker, provider-start and control-socket events, with `worker-failure` kept
+  only as the unknown fallback
+
 ## 0.1.15 - 2026-08-18
 
 - replace provider-managed background and terminal-log result handling with a
