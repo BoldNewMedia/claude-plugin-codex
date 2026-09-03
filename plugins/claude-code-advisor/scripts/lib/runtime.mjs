@@ -11,9 +11,29 @@ export const REVIEW_SEVERITIES = new Set(["BLOCKER", "MAJOR", "MINOR"]);
 export const EMPTY_MCP_CONFIG = '{"mcpServers":{}}';
 export const LOCAL_READ_TOOLS = "Read,Glob,Grep";
 export const WEB_READ_TOOLS = `${LOCAL_READ_TOOLS},WebFetch,WebSearch`;
+export const DEFAULT_BACKGROUND_TIMEOUT_MS = 10 * 60 * 1000;
 export const SUPERVISED_RECORD_VERSION = 2;
 export const SUPERVISED_TRANSPORT = "supervised-print-json";
 export const SUPERVISED_TERMINAL_STATES = new Set(["completed", "cancelled", "failed", "interrupted"]);
+export const SUPERVISED_FAILURE_CLASSIFICATIONS = new Set([
+  "cancellation",
+  "cleanup-failure",
+  "control-socket-error",
+  "interrupted-supervisor",
+  "invalid-result",
+  "non-zero-exit",
+  "output-limit",
+  "provider-start-timeout",
+  "signal-termination",
+  "spawn-failure",
+  "timeout",
+  "unsupported-platform",
+  "worker-exit-code",
+  "worker-exit-signal",
+  "worker-failure",
+  "worker-ipc-disconnect",
+  "worker-stdin-error"
+]);
 
 const SUPERVISED_TRANSITIONS = {
   created: new Set(["starting", "cancelled", "failed", "interrupted"]),
@@ -108,6 +128,43 @@ function validateSupervisedStateRecord(job, stateFile) {
   }
   if (job.result !== undefined && typeof job.result !== "string") {
     throw new Error(`State corruption in ${stateFile}: invalid supervised job result.`);
+  }
+  if (
+    job.failureClassification !== undefined &&
+    !SUPERVISED_FAILURE_CLASSIFICATIONS.has(job.failureClassification)
+  ) {
+    throw new Error(`State corruption in ${stateFile}: invalid supervised failure classification.`);
+  }
+}
+
+export function resolveBackgroundFallbackTimeout(options = {}) {
+  return options["background-timeout-ms"] ?? options.backgroundTimeoutMs ?? DEFAULT_BACKGROUND_TIMEOUT_MS;
+}
+
+export function classifySupervisorFailureEvent(event = {}) {
+  switch (event?.kind) {
+    case "control-socket-error":
+      return "control-socket-error";
+    case "ipc-disconnect":
+      return "worker-ipc-disconnect";
+    case "spawn-error":
+      return "spawn-failure";
+    case "start-timeout":
+      return "provider-start-timeout";
+    case "supervisor-interruption":
+      return "interrupted-supervisor";
+    case "worker-exit":
+      if (typeof event.signal === "string" && event.signal) return "worker-exit-signal";
+      if (Number.isInteger(event.code)) return "worker-exit-code";
+      return "worker-failure";
+    case "worker-stdin-error":
+      return "worker-stdin-error";
+    case "termination-request":
+      return SUPERVISED_FAILURE_CLASSIFICATIONS.has(event.classification)
+        ? event.classification
+        : "worker-failure";
+    default:
+      return "worker-failure";
   }
 }
 
@@ -502,6 +559,12 @@ export function transitionSupervisedJob(stateDir, jobId, transition, options = {
     const patch = transition.patch || {};
     for (const field of Object.keys(patch)) {
       if (!SUPERVISED_PATCH_FIELDS.has(field)) throw new Error("invalid-supervised-state-field");
+    }
+    if (
+      patch.failureClassification !== undefined &&
+      !SUPERVISED_FAILURE_CLASSIFICATIONS.has(patch.failureClassification)
+    ) {
+      throw new Error("invalid-supervised-failure-classification");
     }
     const next = {
       ...existing,

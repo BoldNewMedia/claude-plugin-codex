@@ -105,6 +105,10 @@ commands. The guaranteed Codex surface is the `$claude` skill mention.
   exact-one-document validation of `claude -p --output-format json`. Never use
   terminal logs or stderr as a result source. Report unavailable results
   explicitly.
+- The one automatic foreground-timeout fallback uses the normal 10-minute
+  supervised background deadline. Treat its fixed failure classification as a
+  diagnostic only. Never promote stderr, stdout, prompts, provider output or
+  unrestricted exception text into failure metadata or a result.
 - Review commands fail closed if Git fails or the complete working-tree or
   `--base` diff exceeds 1 MiB. Narrow or split the change; never substitute a
   stat-only or partial review.

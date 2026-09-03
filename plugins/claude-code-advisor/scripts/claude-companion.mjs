@@ -13,6 +13,7 @@ import {
   buildClaudeArgs,
   buildReviewPrompt,
   buildSupervisedPrintArgs,
+  DEFAULT_BACKGROUND_TIMEOUT_MS,
   DEFAULT_DIFF_MAX_BYTES,
   generateJobId,
   isCanonicalResumeReference,
@@ -20,6 +21,7 @@ import {
   loadState,
   parseClaudeJsonResult,
   renderHuman,
+  resolveBackgroundFallbackTimeout,
   resolveStateDir,
   resolveStateRoot,
   resolveWorkspaceIndexDir,
@@ -49,7 +51,6 @@ const DEFAULT_STALE_AFTER_MS = 120000;
 const DEFAULT_CLAUDE_EFFORT = "xhigh";
 const SUPPORTED_MAJOR = 2;
 const MAX_DIAGNOSTIC_CHARS = 2000;
-const DEFAULT_BACKGROUND_TIMEOUT_MS = 10 * 60 * 1000;
 const DEFAULT_STDOUT_LIMIT_BYTES = 1024 * 1024;
 const DEFAULT_STDERR_LIMIT_BYTES = 64 * 1024;
 const SUPERVISOR_LAUNCH_TIMEOUT_MS = 10000;
@@ -654,7 +655,7 @@ async function runForeground(ctx, kind, prompt, options = {}) {
       }
       return await runBackground(ctx, kind, prompt, {
         ...options,
-        "timeout-ms": options["background-timeout-ms"] || options.backgroundTimeoutMs || 30000,
+        "timeout-ms": resolveBackgroundFallbackTimeout(options),
         fallbackFromJobId: job.id,
         fallbackReason: "foreground-timeout",
         fallbackMessage: `Foreground Claude timed out after ${Number(options.timeoutMs || DEFAULT_TIMEOUT_MS)}ms; launched a background job.`

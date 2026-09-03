@@ -238,8 +238,15 @@ oversized output and resume identity changes fail closed. Repeated `monitor`,
 
 Foreground `advise` and `rescue` calls have a two-minute timeout. If one times
 out, the companion records the timed-out attempt and starts one background job
-for the same prompt. Use `--background` up front for real advisor work; use
-`--no-background-fallback` only when you want a timeout to fail fast.
+for the same prompt with the normal 10-minute background deadline. Use
+`--background` up front for real advisor work; use `--no-background-fallback`
+only when you want a timeout to fail fast.
+
+Failed supervised jobs retain only fixed, non-disclosing classifications for
+known provider-start, worker-exit, IPC, worker-input and control-socket events.
+`worker-failure` remains the unknown fallback. Raw stderr, stdout, prompts,
+provider output and unrestricted exception text are never failure metadata or
+result sources.
 
 ## Safety
 

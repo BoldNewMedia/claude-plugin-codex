@@ -267,6 +267,15 @@ $claude cancel <job-id>
 ```
 
 Use background mode for substantial prompts, large context or work likely to take more than one short answer.
+Direct background jobs and the one automatic foreground-timeout fallback use a
+10-minute default deadline.
+
+Failed supervised jobs expose a fixed classification rather than raw process
+output. Known causes include `provider-start-timeout`, `worker-exit-code`,
+`worker-exit-signal`, `worker-ipc-disconnect`, `worker-stdin-error` and
+`control-socket-error`; `worker-failure` is reserved for an unknown cause.
+Stderr, stdout, prompts, provider output and unrestricted exception text are
+never copied into failure metadata.
 
 ## Common flags
 

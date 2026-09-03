@@ -405,7 +405,7 @@ supervisedTest("worker-first exit terminates its owned process group and cleans 
       12000
     );
     assert.equal(terminal.lifecycleState, "failed");
-    assert.equal(terminal.failureClassification, "worker-failure");
+    assert.equal(terminal.failureClassification, "worker-exit-signal");
     assert.equal(terminal.cleanupStatus, "verified");
     assert.equal(Object.hasOwn(terminal, "result"), false);
     assert.equal(Object.hasOwn(terminal, "resultAuthoritativeAt"), false);
@@ -521,7 +521,7 @@ supervisedTest("worker exit before config consumption cannot bypass cleanup thro
   assert.equal(outcome.signal, null);
   const terminal = readJob(harness, jobId);
   assert.equal(terminal.lifecycleState, "failed");
-  assert.equal(terminal.failureClassification, "worker-failure");
+  assert.equal(terminal.failureClassification, "worker-exit-code");
   assert.equal(Object.hasOwn(terminal, "result"), false);
   assert.equal(Object.hasOwn(terminal, "resultAuthoritativeAt"), false);
   const control = supervisorPaths(stateDir, jobId);
@@ -652,6 +652,15 @@ test("terminal state CAS permits exactly one closer and preserves immutable comp
       cleanupStatus: "pending"
     }]
   }, { pathBoundary: harness.stateRoot });
+  assert.throws(
+    () => transitionSupervisedJob(stateDir, "cas-job", {
+      expectedGeneration: 2,
+      expectedStates: ["running"],
+      toState: "failed",
+      patch: { failureClassification: "SECRET raw exception text" }
+    }, { pathBoundary: harness.stateRoot }),
+    /invalid-supervised-failure-classification/
+  );
   const completed = transitionSupervisedJob(stateDir, "cas-job", {
     expectedGeneration: 2,
     expectedStates: ["running"],
