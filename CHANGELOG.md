@@ -2,7 +2,7 @@
 
 All notable public changes to Claude Code Advisor for Codex are recorded here.
 
-## Unreleased
+## 0.1.16 - 2026-09-04
 
 - give an automatic foreground-timeout fallback the normal 10-minute
   supervised background deadline instead of 30 seconds
