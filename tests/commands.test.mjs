@@ -317,7 +317,7 @@ test("review returns validated JSON and stores result", () => {
 const args = process.argv.slice(2);
 if (args.includes("--version")) { console.log("2.1.132 (Claude Code)"); process.exit(0); }
 if (args.includes("-p")) {
-  console.log(JSON.stringify({findings:[{severity:"MAJOR",title:"Gap",fact:"No test",recommendation:"Add test"}]}));
+  console.log(JSON.stringify({type:"result",subtype:"success",is_error:false,session_id:"11111111-1111-4111-8111-111111111111",result:JSON.stringify({findings:[{severity:"MAJOR",title:"Gap",fact:"No test",recommendation:"Add test"}]})}));
   process.exit(0);
 }
 console.error("unsupported"); process.exit(2);
@@ -360,7 +360,7 @@ const prior = fs.existsSync(${JSON.stringify(invocationLog)})
   : 0;
 fs.appendFileSync(${JSON.stringify(invocationLog)}, JSON.stringify({ args, stdinBase64: stdin.toString("base64") }) + "\\n");
 if (prior === 0) console.log("not valid review JSON");
-else console.log(JSON.stringify({findings:[]}));
+else console.log(JSON.stringify({type:"result",subtype:"success",is_error:false,session_id:"11111111-1111-4111-8111-111111111111",result:JSON.stringify({findings:[]})}));
 process.exit(0);
 `);
   const repo = initRepo("claude-adversarial-retry-");
@@ -383,8 +383,7 @@ process.exit(0);
   const firstDelivered = Buffer.from(invocations[0].stdinBase64, "base64").toString("utf8");
   const retryDelivered = Buffer.from(invocations[1].stdinBase64, "base64").toString("utf8");
   assert.equal(firstDelivered, firstPrompt);
-  assert.equal(retryDelivered.startsWith(`${firstPrompt}\n\nYour previous response was invalid:`), true);
-  assert.match(retryDelivered, /Return JSON only\.$/);
+  assert.equal(retryDelivered, `${firstPrompt}\n\nYour previous response was invalid. Return JSON only with the required findings schema.`);
   for (const invocation of invocations) {
     assert.equal(invocation.args.includes(firstDelivered), false);
     assert.equal(invocation.args.includes(retryDelivered), false);
@@ -399,7 +398,7 @@ const fs = require("node:fs");
 const args = process.argv.slice(2);
 if (args.includes("-p")) {
   fs.writeFileSync(${JSON.stringify(promptLog)}, fs.readFileSync(0));
-  console.log(JSON.stringify({findings:[]}));
+  console.log(JSON.stringify({type:"result",subtype:"success",is_error:false,session_id:"11111111-1111-4111-8111-111111111111",result:JSON.stringify({findings:[]})}));
   process.exit(0);
 }
 console.error("unsupported"); process.exit(2);
@@ -433,7 +432,7 @@ const fs = require("node:fs");
 const args = process.argv.slice(2);
 if (args.includes("-p")) {
   fs.writeFileSync(${JSON.stringify(promptLog)}, fs.readFileSync(0));
-  console.log(JSON.stringify({findings:[]}));
+  console.log(JSON.stringify({type:"result",subtype:"success",is_error:false,session_id:"11111111-1111-4111-8111-111111111111",result:JSON.stringify({findings:[]})}));
   process.exit(0);
 }
 console.error("unsupported"); process.exit(2);
@@ -493,7 +492,7 @@ if (args.includes("-p")) {
     console.error("expected --max-turns 1, got " + args[index + 1]);
     process.exit(2);
   }
-  console.log(JSON.stringify({findings:[]}));
+  console.log(JSON.stringify({type:"result",subtype:"success",is_error:false,session_id:"11111111-1111-4111-8111-111111111111",result:JSON.stringify({findings:[]})}));
   process.exit(0);
 }
 console.error("unsupported"); process.exit(2);
@@ -918,7 +917,7 @@ test("a distinctive marker near the diff limit reaches Claude completely", () =>
   const invocationLog = path.join(os.tmpdir(), `fake-large-prompt-${Date.now()}.json`);
   const fake = makeFakeClaude(`
 const fs=require("node:fs");const args=process.argv.slice(2);
-if(args.includes("-p")){const stdin=fs.readFileSync(0);fs.writeFileSync(${JSON.stringify(invocationLog)},JSON.stringify({args,stdinBase64:stdin.toString("base64")}));console.log(JSON.stringify({findings:[]}));process.exit(0)}
+if(args.includes("-p")){const stdin=fs.readFileSync(0);fs.writeFileSync(${JSON.stringify(invocationLog)},JSON.stringify({args,stdinBase64:stdin.toString("base64")}));console.log(JSON.stringify({type:"result",subtype:"success",is_error:false,session_id:"11111111-1111-4111-8111-111111111111",result:JSON.stringify({findings:[]})}));process.exit(0)}
 process.exit(2);
 `);
   const repo = initRepo("claude-near-limit-");

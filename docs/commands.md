@@ -180,6 +180,15 @@ before Claude is invoked if Git fails or the complete diff exceeds 1 MiB.
 Narrow or split the change and rerun; incomplete diffs are never downgraded to
 stat-only reviews.
 
+Both review commands publish completed findings only after Claude exits
+successfully and returns a valid success envelope containing exactly one complete
+JSON review object. Prose and complete Markdown or tool-call wrappers may surround
+the object; only the validated findings are published. Prose-only results,
+incomplete wrappers, ambiguous JSON, duplicate keys and unsupported review fields
+are rejected. An invalid result gets one formatting retry. Command
+failures and timeouts stop without a retry or background fallback. Failed
+attempts retain only a fixed diagnostic, never the raw response or stderr.
+
 ### `adversarial-review`
 
 Challenges a plan or diff and looks for hidden assumptions, failure modes and regressions. It is always read-only.
