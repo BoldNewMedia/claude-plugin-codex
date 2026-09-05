@@ -62,11 +62,25 @@ $claude advise Check this architecture for hidden failure modes.
 
 ### `setup`
 
-Checks Node.js, Claude Code version, authentication and required capabilities.
+Checks Node.js, Claude Code version, authentication available to the current
+process, and print readiness. Authentication status is `available`,
+`unavailable`, or `check-failed`. An unavailable login here does not establish
+that Claude is logged out in your normal terminal.
+
+The live print probe runs only after a supported CLI and successful auth check.
+It uses the configured default model, low effort, no tools, strict empty MCP
+configuration, no Chrome, and plan mode. `printProbe` reports whether the probe
+passed, failed or was skipped, with a fixed reason. Local version and auth checks
+have 10-second deadlines; the live print probe has a 60-second deadline and
+reports `command-timeout` separately from other command errors. Auth and print
+diagnostics do not include raw CLI output or account details.
 
 ```text
 $claude setup
 ```
+
+See [execution-context troubleshooting](../README.md#authentication-and-execution-context)
+when setup works in your terminal but fails in Codex.
 
 ### `advise`
 

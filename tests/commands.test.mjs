@@ -56,7 +56,7 @@ console.error("unsupported"); process.exit(2);
 `);
 }
 
-test("setup reports print capability and only proved supervised background capability", () => {
+test("setup reports print capability and only proved supervised background capability", (t) => {
   const probeLog = path.join(os.tmpdir(), `fake-setup-probe-${Date.now()}.json`);
   const fake = makeFakeClaude(`
 const fs = require("node:fs");
@@ -75,6 +75,11 @@ if (args.includes("-p")) {
 console.error("unsupported"); process.exit(2);
 `);
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "claude-state-"));
+  t.after(() => {
+    fs.rmSync(probeLog, { force: true });
+    fs.rmSync(fake.dir, { recursive: true, force: true });
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  });
   fs.chmodSync(stateRoot, 0o755);
   const stdout = execFileSync(process.execPath, [companion, "setup", "--json"], {
     env: { ...process.env, PATH: `${fake.dir}:${process.env.PATH}`, CLAUDE_COMPANION_STATE_ROOT: stateRoot },
@@ -86,10 +91,25 @@ console.error("unsupported"); process.exit(2);
   assert.equal(payload.ready, true);
   assert.equal(payload.capabilities.print, true);
   assert.equal(payload.capabilities.background, process.platform === "darwin");
+  assert.deepEqual(payload.capabilities.auth, { loggedIn: true, scope: "current-process", status: "available" });
+  assert.deepEqual(payload.capabilities.printProbe, { status: "passed", reason: null });
   const probe = JSON.parse(fs.readFileSync(probeLog, "utf8"));
   assert.equal(Buffer.from(probe.stdinBase64, "base64").toString("utf8"), "Return {}");
   assert.equal(probe.args.includes("Return {}"), false);
   assert.deepEqual(probe.args.slice(0, 3), ["-p", "--output-format", "text"]);
+  for (const [flag, value] of [
+    ["--max-turns", "1"],
+    ["--effort", "low"],
+    ["--mcp-config", '{"mcpServers":{}}'],
+    ["--tools", ""],
+    ["--permission-mode", "plan"]
+  ]) {
+    assert.notEqual(probe.args.indexOf(flag), -1, flag);
+    assert.equal(probe.args[probe.args.indexOf(flag) + 1], value, flag);
+  }
+  assert.equal(probe.args.includes("--strict-mcp-config"), true);
+  assert.equal(probe.args.includes("--no-chrome"), true);
+  assert.equal(probe.args.includes("--model"), false);
   assert.equal(fs.statSync(stateRoot).mode & 0o777, 0o755);
   const workspaceIndex = fs.readdirSync(stateRoot).find((entry) => entry.startsWith("claude-state-"));
   assert.ok(workspaceIndex);
@@ -100,6 +120,163 @@ console.error("unsupported"); process.exit(2);
   assert.equal(fs.statSync(stateDir).mode & 0o777, 0o700);
   assert.equal(fs.statSync(path.join(stateDir, "state.json")).mode & 0o777, 0o600);
   assert.equal(fs.statSync(latestStateFile).mode & 0o777, 0o600);
+});
+
+function setupProbeFixture(t, { version = "2.1.132", authExit = 0, authSignal = false, printExit = 0, printSignal = false, probeError = null } = {}) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "claude-setup-test-"));
+  const stateRoot = path.join(root, "state");
+  const invocationLog = path.join(root, "invocations.jsonl");
+  const deadlineLog = path.join(root, "deadlines.jsonl");
+  const sentinel = "PRIVATE_SETUP_OUTPUT_MUST_NOT_BE_PERSISTED";
+  fs.mkdirSync(stateRoot);
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const fake = makeFakeClaude(`
+const fs = require("node:fs");
+const args = process.argv.slice(2);
+fs.appendFileSync(${JSON.stringify(invocationLog)}, JSON.stringify(args) + "\\n");
+if (args.includes("--version")) {
+  console.log(${JSON.stringify(version + " (Claude Code)")});
+  process.exit(0);
+}
+if (args[0] === "auth" && args[1] === "status") {
+  fs.writeSync(1, ${JSON.stringify(sentinel + "\n")});
+  fs.writeSync(2, ${JSON.stringify(sentinel + "\n")});
+  if (${JSON.stringify(authSignal)}) process.kill(process.pid, "SIGKILL");
+  process.exit(${JSON.stringify(authExit)});
+}
+if (args.includes("-p")) {
+  fs.writeSync(1, ${JSON.stringify(sentinel + "\n")});
+  fs.writeSync(2, ${JSON.stringify(sentinel + "\n")});
+  if (${JSON.stringify(printSignal)}) process.kill(process.pid, "SIGKILL");
+  process.exit(${JSON.stringify(printExit)});
+}
+process.exit(2);
+`);
+  t.after(() => fs.rmSync(fake.dir, { recursive: true, force: true }));
+  const preload = path.join(root, "probe-fixture.cjs");
+  fs.writeFileSync(preload, `
+const fs = require("node:fs");
+const childProcess = require("node:child_process");
+const { syncBuiltinESMExports } = require("node:module");
+const original = childProcess.spawnSync;
+childProcess.spawnSync = function(command, args, options) {
+  if (command === "claude") {
+    const probe = args.includes("-p") ? "print" : args[0] === "auth" ? "auth" : "version";
+    fs.appendFileSync(${JSON.stringify(deadlineLog)}, JSON.stringify({ probe, timeoutMs: options.timeout }) + "\\n");
+    if (${JSON.stringify(probeError)}?.startsWith(probe + "-")) {
+      fs.appendFileSync(${JSON.stringify(invocationLog)}, JSON.stringify(args) + "\\n");
+      const error = Object.assign(new Error(${JSON.stringify(sentinel)}), {
+        code: ${JSON.stringify(probeError)}?.endsWith("-timeout") ? "ETIMEDOUT" : "EACCES"
+      });
+      return { status: null, signal: null, error, stdout: ${JSON.stringify(sentinel)}, stderr: ${JSON.stringify(sentinel)} };
+    }
+  }
+  return original(command, args, options);
+};
+syncBuiltinESMExports();
+`);
+  const result = spawnSync(process.execPath, ["--require", preload, companion, "setup", "--json"], {
+    env: {
+      ...process.env,
+      PATH: `${fake.dir}:${process.env.PATH}`,
+      CLAUDE_COMPANION_STATE_ROOT: stateRoot,
+      CLAUDE_PLUGIN_CODEX_ALLOW_UNKNOWN_CLAUDE: ""
+    },
+    cwd: root,
+    encoding: "utf8",
+    timeout: 5000
+  });
+  assert.equal(result.error, undefined);
+  assert.equal(result.signal, null);
+  assert.equal(result.status, 0, result.stderr);
+  const payload = JSON.parse(result.stdout);
+  const persistedState = fs.readFileSync(path.join(payload.stateDir, "state.json"), "utf8");
+  for (const output of [result.stdout, result.stderr, persistedState]) {
+    assert.equal(output.includes(sentinel), false, "raw probe output must not escape into diagnostics or state");
+  }
+  assert.deepEqual(JSON.parse(persistedState).capabilities, payload.capabilities);
+  const invocations = fs.readFileSync(invocationLog, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+  const deadlines = fs.readFileSync(deadlineLog, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+  return { payload, invocations, deadlines };
+}
+
+test("setup skips the provider when authentication is unavailable in this process", (t) => {
+  const { payload, invocations } = setupProbeFixture(t, { authExit: 1 });
+  assert.equal(payload.ready, false);
+  assert.deepEqual(payload.capabilities.auth, { loggedIn: false, scope: "current-process", status: "unavailable" });
+  assert.deepEqual(payload.capabilities.printProbe, { status: "skipped", reason: "authentication-unavailable" });
+  assert.equal(payload.capabilities.print, false);
+  assert.equal(payload.capabilities.background, false);
+  assert.equal(invocations.some((args) => args.includes("-p")), false);
+});
+
+test("setup distinguishes authentication check errors and skips the provider", (t) => {
+  const { payload, invocations } = setupProbeFixture(t, { authSignal: true });
+  assert.equal(payload.ready, false);
+  assert.deepEqual(payload.capabilities.auth, { loggedIn: false, scope: "current-process", status: "check-failed" });
+  assert.deepEqual(payload.capabilities.printProbe, { status: "skipped", reason: "authentication-check-failed" });
+  assert.equal(payload.capabilities.print, false);
+  assert.equal(payload.capabilities.background, false);
+  assert.equal(invocations.some((args) => args.includes("-p")), false);
+});
+
+test("setup skips the provider for an unsupported Claude version", (t) => {
+  const { payload, invocations } = setupProbeFixture(t, { version: "3.0.0" });
+  assert.equal(payload.ready, false);
+  assert.equal(payload.capabilities.version.supported, false);
+  assert.deepEqual(payload.capabilities.printProbe, { status: "skipped", reason: "unsupported-version" });
+  assert.equal(payload.capabilities.print, false);
+  assert.equal(payload.capabilities.background, false);
+  assert.equal(invocations.some((args) => args.includes("-p")), false);
+});
+
+test("setup keeps provider failure distinct from available authentication", (t) => {
+  const { payload, invocations } = setupProbeFixture(t, { printExit: 1 });
+  assert.equal(payload.ready, false);
+  assert.deepEqual(payload.capabilities.auth, { loggedIn: true, scope: "current-process", status: "available" });
+  assert.deepEqual(payload.capabilities.printProbe, { status: "failed", reason: "command-failed" });
+  assert.equal(payload.capabilities.print, false);
+  assert.equal(payload.capabilities.background, false);
+  assert.equal(invocations.filter((args) => args.includes("-p")).length, 1);
+});
+
+test("setup reports provider command errors without exposing raw output", (t) => {
+  const { payload, invocations } = setupProbeFixture(t, { printSignal: true });
+  assert.equal(payload.ready, false);
+  assert.deepEqual(payload.capabilities.auth, { loggedIn: true, scope: "current-process", status: "available" });
+  assert.deepEqual(payload.capabilities.printProbe, { status: "failed", reason: "command-error" });
+  assert.equal(payload.capabilities.print, false);
+  assert.equal(payload.capabilities.background, false);
+  assert.equal(invocations.filter((args) => args.includes("-p")).length, 1);
+});
+
+test("setup distinguishes a provider timeout and bounds local and live probes separately", (t) => {
+  const { payload, invocations, deadlines } = setupProbeFixture(t, { probeError: "print-timeout" });
+  assert.equal(payload.ready, false);
+  assert.deepEqual(payload.capabilities.auth, { loggedIn: true, scope: "current-process", status: "available" });
+  assert.deepEqual(payload.capabilities.printProbe, { status: "failed", reason: "command-timeout" });
+  assert.equal(payload.capabilities.print, false);
+  assert.equal(payload.capabilities.background, false);
+  assert.deepEqual(deadlines, [
+    { probe: "version", timeoutMs: 10000 },
+    { probe: "auth", timeoutMs: 10000 },
+    { probe: "print", timeoutMs: 60000 }
+  ]);
+  assert.equal(invocations.filter((args) => args.includes("-p")).length, 1);
+});
+
+test("setup does not mistake a provider spawn error for a timeout", (t) => {
+  const { payload } = setupProbeFixture(t, { probeError: "print-spawn-error" });
+  assert.equal(payload.ready, false);
+  assert.deepEqual(payload.capabilities.printProbe, { status: "failed", reason: "command-error" });
+});
+
+test("setup treats an authentication timeout as a failed check and skips the provider", (t) => {
+  const { payload, invocations } = setupProbeFixture(t, { probeError: "auth-timeout" });
+  assert.equal(payload.ready, false);
+  assert.deepEqual(payload.capabilities.auth, { loggedIn: false, scope: "current-process", status: "check-failed" });
+  assert.deepEqual(payload.capabilities.printProbe, { status: "skipped", reason: "authentication-check-failed" });
+  assert.equal(invocations.some((args) => args.includes("-p")), false);
 });
 
 test("foreground prompts reach Claude byte-for-byte through stdin and remain absent from argv", () => {

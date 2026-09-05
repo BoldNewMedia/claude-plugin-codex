@@ -414,15 +414,19 @@ npm run test:e2e:codex
 ```
 
 This requires `codex plugin marketplace add ./` and **Claude Code Advisor**
-installed from Codex's plugin directory. It
-starts a fresh `codex exec` session and verifies that
-`$claude advise --model sonnet` routes through the installed skill. The test
-uses Codex's `workspace-write` sandbox,
-supplies a private temporary companion state root inside the checkout, and
-removes that state before checking the worktree. If the nested Codex sandbox
-cannot access Claude's authenticated session, the test reports authentication
-unavailability explicitly and verifies routing only. The separate opt-in smoke
-above verifies the authenticated Claude contract. Sonnet is used only for this
+installed from Codex's plugin directory. It starts a fresh `codex exec` session
+and verifies that setup and `$claude advise --model sonnet` route through the
+same installed skill. The test uses Codex's `workspace-write` sandbox with
+approvals disabled and foreground advice with no background fallback.
+
+The test uses a private temporary companion state root outside the checkout.
+It removes that state only after verifying a terminal job and matching command
+output. Failed or inconclusive test runs preserve their state for diagnosis.
+An exact `PASS` response verifies authenticated advice. If setup independently
+reports unavailable authentication and the saved advice job confirms the failure,
+the test reports authentication unavailability and verifies routing only. A
+generic Claude failure alone does not pass. The separate opt-in smoke above
+verifies the authenticated background contract. Sonnet is used only for this
 small routing test.
 
 ## Current Limits
@@ -460,6 +464,42 @@ small routing test.
   before failing.
 
 ## Troubleshooting
+
+### Authentication and execution context
+
+`$claude setup` checks authentication available to its current process.
+`auth.status: unavailable` does not prove that your host account is logged out.
+`check-failed` means the auth check could not complete. Setup skips its live
+print probe when the CLI version is unsupported or authentication is unavailable,
+and reports the reason in `printProbe`. The trivial print probe uses low effort
+and a 60-second deadline; `command-timeout` identifies an elapsed deadline.
+A failed print probe after successful authentication is a separate readiness
+failure.
+
+If Claude works in your normal terminal but setup fails in Codex, compare setup
+using the same installed companion, Node executable and working directory in
+both contexts:
+
+```bash
+/absolute/path/to/node /absolute/path/to/installed/plugin/scripts/claude-companion.mjs setup --json
+```
+
+On macOS, an inherited sandbox can prevent access to Claude's Keychain login.
+Allowing `api.anthropic.com` or choosing a writable state directory does not
+grant credential access. Use the host's supported approval or execution controls,
+then verify setup in the resulting context. A requested escalation or saved rule
+is not proof that the process gained access. Check that any command rule matches
+the current installed plugin path after an update. Codex documents these controls
+in its [permissions](https://learn.chatgpt.com/docs/sandboxing) and
+[rules](https://learn.chatgpt.com/docs/agent-configuration/rules) guides.
+
+If the host cannot provide an authorised execution context with credential
+access, authenticated work remains unavailable from that context. Report the
+blocker. Do not repeatedly log in, copy credentials into files or environment
+variables, or add a launcher to bypass the host's restrictions. The companion
+inherits host permissions and cannot grant them.
+
+### Other setup and runtime errors
 
 If Codex shows `Unable to load skill contents` after an update, restart Codex
 or start a new thread. Codex may still point at an older cached skill path after

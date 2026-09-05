@@ -1,14 +1,18 @@
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
+import { isDeepStrictEqual } from "node:util";
 import { fileURLToPath } from "node:url";
+import { loadState, resolveStateDir } from "../plugins/claude-code-advisor/scripts/lib/runtime.mjs";
 
 const currentFile = fileURLToPath(import.meta.url);
 const repoRoot = path.resolve(path.dirname(currentFile), "..");
 const skillMarker = "claude-code-advisor:claude";
 const advisePrompt = [
-  "Use $claude advise --model sonnet --max-turns 1 --timeout-ms 120000 to ask Claude Code to reply with exactly PASS.",
-  "Do not modify files.",
+  "Run $claude setup --json first, then exactly one $claude advise --model sonnet --max-turns 1 --timeout-ms 120000 --no-background-fallback to ask Claude Code to reply with exactly PASS.",
+  "Run setup and advise as separate direct node commands using the same installed companion, without shell wrappers, cd or environment assignments. Do not retry either command.",
+  "Do not enable background work, writes, web or MCP access. Do not request approval or escalation. Do not modify files.",
   "Return only a concise PASS/FAIL summary with the key command result."
 ].join(" ");
 const safeStages = new Set([
@@ -19,6 +23,8 @@ const safeStages = new Set([
   "codex-exec",
   "state-cleanup",
   "routed-command",
+  "routed-setup",
+  "routed-state",
   "routed-output",
   "worktree-after",
   "internal"
@@ -33,6 +39,9 @@ const safeReasons = new Set([
   "filesystem",
   "routing-missing",
   "companion-failed",
+  "invalid-setup",
+  "invalid-state",
+  "unsafe-command",
   "unexpected-result",
   "worktree-changed",
   "unexpected"
@@ -59,13 +68,144 @@ export function classifyCommandFailure(result) {
   return null;
 }
 
-export function classifyRoutedOutput(value) {
+export function classifyRoutedOutput(value, { authenticationUnavailable = false, job } = {}) {
   const output = typeof value === "string" ? value : "";
   if (output === "PASS\n") return "authenticated";
-  if (/^Claude job advise-[a-z0-9]+-[a-z0-9]{1,6} failed\.\nNot logged in · Please run \/login\n$/u.test(output)) {
+  if (authenticationUnavailable && job?.status === "failed"
+    && /^advise-[a-z0-9]+-[a-z0-9]{1,6}$/u.test(job.id)
+    && job.result === "Claude command failed with status 1."
+    && output === `Claude job ${job.id} failed.\n${job.result}\n`) {
     return "authentication-unavailable";
   }
   return "unexpected";
+}
+
+function shellWords(command) {
+  const words = [];
+  let word = "";
+  let quote = null;
+  for (let index = 0; index < command.length; index += 1) {
+    const char = command[index];
+    if (char === "\\" && quote !== "'") {
+      if (++index === command.length) return [];
+      word += command[index];
+    } else if (char === quote) {
+      quote = null;
+    } else if (!quote && (char === "'" || char === '"')) {
+      quote = char;
+    } else if (!quote && /\s/u.test(char)) {
+      if (word) words.push(word);
+      word = "";
+    } else {
+      word += char;
+    }
+  }
+  if (quote) return [];
+  if (word) words.push(word);
+  return words;
+}
+
+function routedInvocation(item) {
+  let words = shellWords(item.command);
+  // Codex records its execution shell even when the requested command is direct.
+  // Unwrap one known shell invocation, then apply the same direct-node checks.
+  if (["/bin/bash", "/bin/zsh"].includes(words[0])) {
+    if (words.length !== 3 || !["-c", "-lc"].includes(words[1])) throw e2eFailure("routed-command", "unsafe-command");
+    words = shellWords(words[2]);
+  }
+  const [node, launcher, ...args] = words;
+  if (!node || path.basename(node) !== "node" || !launcher || !path.isAbsolute(launcher)
+    || !launcher.endsWith("/claude-companion.mjs") || words.some((arg) => /[$;&|<>`\n]/u.test(arg))) {
+    throw e2eFailure("routed-command", "unsafe-command");
+  }
+  if (args[0] === "setup" && isDeepStrictEqual(args.slice(1), ["--json"])) return { kind: "setup", launcher };
+  if (args[0] !== "advise") throw e2eFailure("routed-command", "unsafe-command");
+  const required = new Map([["--model", "sonnet"], ["--max-turns", "1"], ["--timeout-ms", "120000"], ["--no-background-fallback", null]]);
+  let prompt = false;
+  for (let index = 1; index < args.length; index += 1) {
+    const arg = args[index];
+    if (required.has(arg)) {
+      const value = required.get(arg);
+      if (value !== null && args[++index] !== value) throw e2eFailure("routed-command", "unsafe-command");
+      required.delete(arg);
+    } else if (arg === "--effort" && args[index + 1] === "xhigh") {
+      index += 1;
+    } else if (arg.startsWith("-")) {
+      throw e2eFailure("routed-command", "unsafe-command");
+    } else {
+      prompt = true;
+    }
+  }
+  if (required.size || !prompt) throw e2eFailure("routed-command", "unsafe-command");
+  return { kind: "advise", launcher };
+}
+
+function setupAuthentication(setup, launcher) {
+  const capabilities = setup?.capabilities;
+  const auth = capabilities?.auth;
+  const version = capabilities?.version;
+  if (setup?.node?.supported !== true || version?.supported !== true || version.major !== 2
+    || typeof setup.node.version !== "string" || !/^v(?:1[89]|[2-9]\d|\d{3,})\./u.test(setup.node.version)
+    || typeof version.raw !== "string" || !Number.isInteger(version.minor) || version.minor < 0
+    || !Number.isInteger(version.patch) || version.patch < 0
+    || typeof auth?.loggedIn !== "boolean" || typeof capabilities.print !== "boolean"
+    || typeof capabilities.background !== "boolean" || typeof setup.ready !== "boolean"
+    || setup.ready !== (auth.loggedIn && capabilities.print) || (capabilities.background && !capabilities.print)) {
+    throw e2eFailure("routed-setup", "invalid-setup");
+  }
+  if (Object.hasOwn(auth, "status") || Object.hasOwn(auth, "scope")) {
+    if (Object.keys(auth).length !== 3 || auth.scope !== "current-process" || auth.status !== (auth.loggedIn ? "available" : "unavailable")) {
+      throw e2eFailure("routed-setup", "invalid-setup");
+    }
+    const probe = capabilities.printProbe;
+    if (capabilities.print ? !isDeepStrictEqual(probe, { status: "passed", reason: null })
+      : !auth.loggedIn ? !isDeepStrictEqual(probe, { status: "skipped", reason: "authentication-unavailable" })
+        : probe?.status !== "failed" || !["command-failed", "command-error", "command-timeout"].includes(probe.reason)) {
+      throw e2eFailure("routed-setup", "invalid-setup");
+    }
+  } else {
+    // In installed 0.1.16, setup throws on auth spawn errors, signals and timeouts.
+    // Its successful JSON with loggedIn:false therefore records a non-zero auth exit.
+    if (!/\/claude-code-advisor\/0\.1\.16\/scripts\/claude-companion\.mjs$/u.test(launcher)
+      || !isDeepStrictEqual(Object.keys(auth), ["loggedIn"]) || Object.hasOwn(capabilities, "printProbe")) {
+      throw e2eFailure("routed-setup", "invalid-setup");
+    }
+  }
+  if (!auth.loggedIn && (capabilities.print || capabilities.background)) throw e2eFailure("routed-setup", "invalid-setup");
+  return auth.loggedIn ? "available" : "unavailable";
+}
+
+export function inspectRoutedRun(execOutput, { stateRoot, workspaceRoot }) {
+  const commands = parseJsonLines(execOutput).filter((event) => event.type === "item.completed"
+    && event.item?.type === "command_execution" && event.item.command?.includes("claude-companion.mjs"));
+  if (commands.length !== 2) throw e2eFailure("routed-command", "routing-missing");
+  const [setupCommand, adviseCommand] = commands.map((event) => event.item);
+  const setupInvocation = routedInvocation(setupCommand);
+  const adviseInvocation = routedInvocation(adviseCommand);
+  if (setupInvocation.kind !== "setup" || adviseInvocation.kind !== "advise"
+    || setupInvocation.launcher !== adviseInvocation.launcher) throw e2eFailure("routed-command", "routing-missing");
+  if (setupCommand.exit_code !== 0 || adviseCommand.exit_code !== 0) throw e2eFailure("routed-command", "companion-failed");
+  let setup;
+  try { setup = JSON.parse(setupCommand.aggregated_output); } catch { throw e2eFailure("routed-setup", "invalid-setup"); }
+  const authentication = setupAuthentication(setup, setupInvocation.launcher);
+  const expectedParent = path.dirname(resolveStateDir(workspaceRoot, {}, stateRoot));
+  if (typeof setup.stateDir !== "string" || path.dirname(setup.stateDir) !== expectedParent
+    || !/^(workspace|thread-[a-zA-Z0-9._-]+)$/u.test(path.basename(setup.stateDir))) {
+    throw e2eFailure("routed-state", "invalid-state");
+  }
+  let state;
+  try { state = loadState(setup.stateDir, { pathBoundary: stateRoot }); } catch { throw e2eFailure("routed-state", "invalid-state"); }
+  const job = state.jobs[0];
+  if (state.jobs.length !== 1 || !isDeepStrictEqual(state.capabilities, setup.capabilities)
+    || job.kind !== "advise" || job.write !== false || job.workspaceRoot !== workspaceRoot
+    || job.transport || job.lifecycleState || job.fallbackFromJobId || !["completed", "failed"].includes(job.status)) {
+    throw e2eFailure("routed-state", "invalid-state");
+  }
+  const classification = classifyRoutedOutput(adviseCommand.aggregated_output, { authenticationUnavailable: authentication === "unavailable", job });
+  if (classification === "unexpected" || (classification === "authenticated" && (job.status !== "completed" || job.result !== "PASS"))) {
+    throw e2eFailure("routed-output", "unexpected-result");
+  }
+  return classification;
 }
 
 function run(stage, command, args, options = {}) {
@@ -106,40 +246,24 @@ function main() {
   const statusBefore = run("worktree-before", "git", ["status", "--short"]);
   let stateRoot;
   try {
-    stateRoot = fs.mkdtempSync(path.join(repoRoot, ".claude-plugin-codex-e2e-state-"));
+    stateRoot = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), "claude-plugin-codex-e2e-state-"));
   } catch {
     throw e2eFailure("state-setup", "filesystem");
   }
 
-  let execOutput;
-  try {
-    execOutput = run(
+  const execOutput = run(
       "codex-exec",
       "codex",
-      ["exec", "--sandbox", "workspace-write", "--cd", repoRoot, "--json", advisePrompt],
+      ["--ask-for-approval", "never", "exec", "--sandbox", "workspace-write", "--cd", repoRoot, "--json", advisePrompt],
       { input: "", env: { ...process.env, CLAUDE_COMPANION_STATE_ROOT: stateRoot } }
     );
-  } finally {
-    try {
-      fs.rmSync(stateRoot, { recursive: true, force: true });
-    } catch {
-      throw e2eFailure("state-cleanup", "filesystem");
-    }
+  // Failed or unknown runs retain their state, including any live job handles.
+  const routedClassification = inspectRoutedRun(execOutput, { stateRoot, workspaceRoot: repoRoot });
+  try {
+    fs.rmSync(stateRoot, { recursive: true, force: true });
+  } catch {
+    throw e2eFailure("state-cleanup", "filesystem");
   }
-
-  const adviseCommands = parseJsonLines(execOutput).filter((event) => {
-    return event.type === "item.completed"
-      && event.item?.type === "command_execution"
-      && event.item.command?.includes("claude-companion.mjs")
-      && event.item.command?.includes("advise")
-      && event.item.command?.includes("--model sonnet");
-  });
-  if (adviseCommands.length !== 1) throw e2eFailure("routed-command", "routing-missing");
-  const adviseCommand = adviseCommands[0];
-  if (adviseCommand.item.exit_code !== 0) throw e2eFailure("routed-command", "companion-failed");
-
-  const routedClassification = classifyRoutedOutput(adviseCommand.item.aggregated_output);
-  if (routedClassification === "unexpected") throw e2eFailure("routed-output", "unexpected-result");
 
   const statusAfter = run("worktree-after", "git", ["status", "--short"]);
   if (statusAfter !== statusBefore) throw e2eFailure("worktree-after", "worktree-changed");

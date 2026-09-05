@@ -41,6 +41,8 @@ import {
 const supervisorScript = fileURLToPath(new URL("./claude-supervisor.mjs", import.meta.url));
 
 const DEFAULT_TIMEOUT_MS = 120000;
+const SETUP_LOCAL_TIMEOUT_MS = 10000;
+const SETUP_PRINT_TIMEOUT_MS = 60000;
 const DEFAULT_TASK_MAX_TURNS = 20;
 const DEFAULT_REVIEW_MAX_TURNS = 1;
 const DEFAULT_MONITOR_INTERVAL_MS = 30000;
@@ -237,7 +239,9 @@ function runClaude(args, options = {}) {
   });
 
   if (result.error?.code === "ETIMEDOUT") {
-    throw new Error(`Claude command timed out after ${options.timeoutMs ?? DEFAULT_TIMEOUT_MS}ms.`);
+    throw Object.assign(new Error(`Claude command timed out after ${options.timeoutMs ?? DEFAULT_TIMEOUT_MS}ms.`), {
+      code: "ETIMEDOUT"
+    });
   }
   if (result.error) {
     throw result.error;
@@ -262,9 +266,14 @@ function isMaxTurnLimitOutput(value) {
   return /\b(?:hit|reached)\s+(?:the\s+)?max[- ]turns?\b/i.test(text) || /\bmax[- ]turn limit\b/i.test(text);
 }
 
-function commandAvailable(commandArgs, input) {
-  const result = runClaude(commandArgs, { input, timeoutMs: 10000 });
-  return result.status === 0;
+function setupProbe(commandArgs, input, timeoutMs = SETUP_LOCAL_TIMEOUT_MS) {
+  try {
+    const result = runClaude(commandArgs, { input, timeoutMs });
+    return result.status === 0 ? "passed" : "failed";
+  } catch (error) {
+    // Setup diagnostics must not include CLI output or exception text.
+    return error?.code === "ETIMEDOUT" ? "timeout" : "error";
+  }
 }
 
 function parseClaudeVersion(stdout) {
@@ -498,17 +507,43 @@ function gitContext(cwd, options = {}) {
 }
 
 function detectCapabilities() {
-  const versionResult = runClaude(["--version"], { timeoutMs: 10000 });
+  const versionResult = runClaude(["--version"], { timeoutMs: SETUP_LOCAL_TIMEOUT_MS });
   const version = parseClaudeVersion(versionResult.stdout || versionResult.stderr);
-  const auth = runClaude(["auth", "status", "--text"], { timeoutMs: 10000 });
-  const print = commandAvailable(["-p", "--output-format", "text", "--max-turns", "1", "--tools", ""], "Return {}");
+  const authProbe = setupProbe(["auth", "status", "--text"]);
+  const authStatus = authProbe === "passed" ? "available" : authProbe === "failed" ? "unavailable" : "check-failed";
+  let printProbe;
+  if (!version.supported || authStatus !== "available") {
+    printProbe = {
+      status: "skipped",
+      reason: !version.supported ? "unsupported-version" : `authentication-${authStatus}`
+    };
+  } else {
+    const prompt = "Return {}";
+    const outcome = setupProbe(buildClaudeArgs({
+      mode: "review",
+      prompt,
+      maxTurns: 1,
+      // This is a trivial readiness check, not substantive review work.
+      effort: "low"
+    }), prompt, SETUP_PRINT_TIMEOUT_MS);
+    printProbe = {
+      status: outcome === "passed" ? "passed" : "failed",
+      reason: outcome === "passed" ? null
+        : outcome === "failed" ? "command-failed"
+          : outcome === "timeout" ? "command-timeout" : "command-error"
+    };
+  }
+  const print = printProbe.status === "passed";
   const background = version.supported && print && process.platform === "darwin";
   return {
     version,
     auth: {
-      loggedIn: auth.status === 0
+      loggedIn: authStatus === "available",
+      status: authStatus,
+      scope: "current-process"
     },
     print,
+    printProbe,
     background
   };
 }
