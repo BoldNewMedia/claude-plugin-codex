@@ -802,17 +802,20 @@ function scanJsonString(text, index) {
   throw new Error("invalid-result");
 }
 
-function scanJsonValue(text, index) {
+function scanJsonValue(text, index, rejectDuplicateKeys = false) {
   index = skipJsonWhitespace(text, index);
   if (text[index] === '"') return scanJsonString(text, index).index;
   if (text[index] === "{") {
     index = skipJsonWhitespace(text, index + 1);
     if (text[index] === "}") return index + 1;
+    const keys = new Set();
     while (index < text.length) {
       const key = scanJsonString(text, index);
+      if (rejectDuplicateKeys && keys.has(key.value)) throw new Error("invalid-result");
+      keys.add(key.value);
       index = skipJsonWhitespace(text, key.index);
       if (text[index] !== ":") throw new Error("invalid-result");
-      index = scanJsonValue(text, index + 1);
+      index = scanJsonValue(text, index + 1, rejectDuplicateKeys);
       index = skipJsonWhitespace(text, index);
       if (text[index] === "}") return index + 1;
       if (text[index] !== ",") throw new Error("invalid-result");
@@ -823,7 +826,7 @@ function scanJsonValue(text, index) {
     index = skipJsonWhitespace(text, index + 1);
     if (text[index] === "]") return index + 1;
     while (index < text.length) {
-      index = scanJsonValue(text, index);
+      index = scanJsonValue(text, index, rejectDuplicateKeys);
       index = skipJsonWhitespace(text, index);
       if (text[index] === "]") return index + 1;
       if (text[index] !== ",") throw new Error("invalid-result");
@@ -1321,12 +1324,16 @@ export function validateReviewPayload(raw) {
   let parsed;
   try {
     parsed = JSON.parse(trimmed);
-  } catch (error) {
-    throw new Error(`Invalid JSON review output: ${error.message}`);
+    scanJsonValue(trimmed, 0, true);
+  } catch {
+    throw new Error("Invalid JSON review output.");
   }
 
   if (!Array.isArray(parsed.findings)) {
     throw new Error("Review output must include a findings array.");
+  }
+  if (Object.keys(parsed).some((key) => key !== "findings")) {
+    throw new Error("Review output has unsupported fields.");
   }
 
   for (const finding of parsed.findings) {
@@ -1336,6 +1343,9 @@ export function validateReviewPayload(raw) {
     assertString(finding.title, "title");
     assertString(finding.fact, "fact");
     assertString(finding.recommendation, "recommendation");
+    if (Object.keys(finding).some((key) => !["severity", "title", "fact", "recommendation"].includes(key))) {
+      throw new Error("Review finding has unsupported fields.");
+    }
   }
 
   return parsed;
@@ -1360,17 +1370,54 @@ export function parseClaudeJsonResult(raw) {
 
 function normalizeClaudeResult(raw) {
   const trimmed = String(raw || "").trim();
-  const toolCalls = trimmed.match(/^<function_calls>[\s\S]*?<\/function_calls>\s*/);
-  const withoutToolCalls = toolCalls ? trimmed.slice(toolCalls[0].length).trim() : trimmed;
   try {
-    JSON.parse(withoutToolCalls);
-    return withoutToolCalls;
+    JSON.parse(trimmed);
+    return trimmed;
   } catch {
-    const candidates = extractJsonObjects(withoutToolCalls);
+    const candidates = extractJsonObjects(trimmed);
     if (candidates.length > 1) {
       throw new Error("Ambiguous JSON Claude result: multiple complete objects were returned.");
     }
-    return candidates[0] || withoutToolCalls;
+    if (candidates.length !== 1) throw new Error("Invalid JSON Claude result.");
+    const candidate = candidates[0];
+    const prefix = trimmed.slice(0, candidate.start);
+    const suffix = trimmed.slice(candidate.end);
+    const framing = prefix + suffix;
+    for (const line of [prefix, suffix].flatMap((part) => part.split(/\r?\n/))) {
+      const fragment = line.trim();
+      if (!fragment.startsWith("[")) continue;
+      let end;
+      try {
+        end = scanJsonValue(fragment, 0);
+      } catch {
+        // A standalone array fragment can be a truncated competing result.
+        // Ordinary links and bracketed prose do not start with a JSON value.
+        if (/^\[\s*(?:$|[\[\]{"\d-]|true\b|false\b|null\b)/.test(fragment)) {
+          throw new Error("Invalid JSON Claude result.");
+        }
+        continue;
+      }
+      if (skipJsonWhitespace(fragment, end) === fragment.length) {
+        throw new Error("Ambiguous JSON Claude result: an additional array was returned.");
+      }
+    }
+    // Inspect framing outside the object; finding strings may quote markup.
+    if (/<\/?function_calls/.test(framing)) {
+      const toolCalls = prefix.match(/^<function_calls>[\s\S]*?<\/function_calls>/);
+      if (
+        !toolCalls ||
+        /<\/?function_calls/.test(toolCalls[0].slice("<function_calls>".length, -"</function_calls>".length)) ||
+        /<\/?function_calls/.test(framing.slice(toolCalls[0].length))
+      ) throw new Error("Invalid Claude result wrapper.");
+    }
+    if (framing.includes("```")) {
+      if (
+        (framing.match(/```/g) || []).length !== 2 ||
+        !/(?:^|[^`])```(?:json)?[ \t]*\r?\n\s*$/i.test(prefix) ||
+        !/^\s*```(?!`)/.test(suffix)
+      ) throw new Error("Invalid Claude result wrapper.");
+    }
+    return candidate.raw;
   }
 }
 
@@ -1379,6 +1426,7 @@ function extractJsonObjects(value) {
   const objects = [];
   let start = -1;
   let depth = 0;
+  let bracketDepth = 0;
   let inString = false;
   let escaped = false;
   for (let index = 0; index < text.length; index += 1) {
@@ -1400,17 +1448,26 @@ function extractJsonObjects(value) {
     }
     if (char === "{") {
       if (depth === 0) {
+        // Brackets in surrounding prose are harmless, but an object nested
+        // inside an array must not become a standalone review payload.
+        if (bracketDepth > 0) throw new Error("Invalid JSON Claude result.");
         start = index;
       }
       depth += 1;
-    } else if (char === "}" && depth > 0) {
+    } else if (char === "}") {
+      if (depth === 0) throw new Error("Invalid JSON Claude result.");
       depth -= 1;
       if (depth === 0) {
-        objects.push(text.slice(start, index + 1).trim());
+        objects.push({ raw: text.slice(start, index + 1), start, end: index + 1 });
         start = -1;
       }
+    } else if (depth === 0 && char === "[") {
+      bracketDepth += 1;
+    } else if (depth === 0 && char === "]") {
+      bracketDepth = Math.max(0, bracketDepth - 1);
     }
   }
+  if (depth !== 0 || inString || escaped) throw new Error("Invalid JSON Claude result.");
   return objects;
 }
 

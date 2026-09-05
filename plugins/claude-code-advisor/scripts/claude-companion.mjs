@@ -233,7 +233,7 @@ function runClaude(args, options = {}) {
   const result = spawnSync("claude", args, {
     cwd: options.cwd || process.cwd(),
     env,
-    encoding: "utf8",
+    encoding: options.rawOutput ? null : "utf8",
     input: options.input,
     timeout: options.timeoutMs ?? DEFAULT_TIMEOUT_MS
   });
@@ -646,6 +646,7 @@ function resolveJobResumeReference(ctx, candidate, options = {}) {
 }
 
 async function runForeground(ctx, kind, prompt, options = {}) {
+  const isReview = kind === "review" || kind === "adversarial-review";
   const resume = options.resume
     ? selectResumeCandidate(ctx.state.jobs, process.env, {
         explicitJobId: options["job-id"] || null,
@@ -676,9 +677,13 @@ async function runForeground(ctx, kind, prompt, options = {}) {
     result = runClaude(args, {
       cwd: ctx.cwd,
       input: prompt,
+      rawOutput: isReview,
       timeoutMs: Number(options.timeoutMs || DEFAULT_TIMEOUT_MS)
     });
   } catch (error) {
+    if (isReview) {
+      return failReviewJob(ctx, job, error?.code === "ETIMEDOUT" ? "timeout" : "command-failure");
+    }
     if (isTimeoutError(error) && !options["no-background-fallback"]) {
       completeJob(ctx, job, {
         status: "timed_out",
@@ -702,6 +707,28 @@ async function runForeground(ctx, kind, prompt, options = {}) {
       result: "Claude command failed before returning a supported result."
     });
     throw error;
+  }
+  if (isReview) {
+    if (result.status !== 0) return failReviewJob(ctx, job, "command-failure");
+    let envelope;
+    let parsed;
+    try {
+      envelope = validateSupervisedClaudeResult(result.stdout, resumeSessionId);
+      parsed = validateReviewPayload(parseClaudeJsonResult(result.stdout.toString("utf8")).contentRaw);
+    } catch {
+      return failReviewJob(ctx, job, "invalid-result");
+    }
+    return completeJob(ctx, job, {
+      status: "completed",
+      result: parsed,
+      resultState: "available",
+      resultSource: "provider-json",
+      resultAuthoritativeAt: new Date().toISOString(),
+      claudeSessionId: envelope.sessionId,
+      canonicalSessionId: envelope.sessionId,
+      resumeSessionId: envelope.sessionId,
+      failureDiagnostic: null
+    });
   }
   const status = result.status === 0 ? "completed" : "failed";
   const failedForMaxTurns = result.status !== 0 && isMaxTurnLimitOutput(`${result.stdout}\n${result.stderr}`);
@@ -874,6 +901,18 @@ async function handleDo(argv) {
   await handleTaskCommand(argv, "do");
 }
 
+function failReviewJob(ctx, job, classification) {
+  const diagnostic = `Claude review failed: ${classification}.`;
+  return completeJob(ctx, job, {
+    status: "failed",
+    result: null,
+    resultState: "unavailable",
+    failureClassification: classification,
+    failureDiagnostic: diagnostic,
+    resultDiagnostic: diagnostic
+  });
+}
+
 async function handleReview(argv, kind) {
   const { options, positionals } = parseArgs(argv);
   const ctx = currentContext(options);
@@ -884,39 +923,25 @@ async function handleReview(argv, kind) {
     gitContext: gitContext(ctx.cwd, options),
     focus
   });
-  const job = await runForeground(ctx, kind, prompt, {
+  const reviewOptions = {
     ...options,
     outputFormat: "json",
     maxTurns: options["max-turns"] || DEFAULT_REVIEW_MAX_TURNS,
     timeoutMs: options["timeout-ms"]
-  });
+  };
+  let job = await runForeground(ctx, kind, prompt, reviewOptions);
+  if (job.failureClassification === "invalid-result") {
+    job = await runForeground(ctx, kind, `${prompt}\n\nYour previous response was invalid. Return JSON only with the required findings schema.`, {
+      ...reviewOptions,
+      maxTurns: 1
+    });
+  }
   if (job.status !== "completed") {
     output({ jobId: job.id, status: job.status, diagnostic: job.failureDiagnostic }, options.json);
     process.exitCode = 1;
     return;
   }
-  let parsed;
-  let claudeJson;
-  try {
-    claudeJson = parseClaudeJsonResult(job.stdout);
-    parsed = validateReviewPayload(claudeJson.contentRaw);
-  } catch (error) {
-    const retry = await runForeground(ctx, kind, `${prompt}\n\nYour previous response was invalid: ${error.message}. Return JSON only.`, {
-      ...options,
-      outputFormat: "json",
-      maxTurns: 1,
-      timeoutMs: options["timeout-ms"]
-    });
-    claudeJson = parseClaudeJsonResult(retry.stdout);
-    parsed = validateReviewPayload(claudeJson.contentRaw);
-    Object.assign(job, retry);
-  }
-  const completed = completeJob(ctx, job, {
-    result: parsed,
-    claudeSessionId: claudeJson.sessionId ?? job.claudeSessionId ?? null,
-    claudeEnvelope: claudeJson.envelope
-  });
-  output({ jobId: completed.id, status: completed.status, result: parsed }, options.json);
+  output({ jobId: job.id, status: job.status, result: job.result }, options.json);
 }
 
 function findJob(ctx, reference) {

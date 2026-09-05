@@ -575,6 +575,95 @@ test("parseClaudeJsonResult rejects ambiguous multiple JSON objects", () => {
   assert.throws(() => parseClaudeJsonResult(raw), /Ambiguous JSON Claude result/);
 });
 
+test("parseClaudeJsonResult retains the exact review inside a balanced JSON fence", () => {
+  const payload = { findings: [{ severity: "MINOR", title: "Fence", fact: "One result is present.", recommendation: "Keep only the findings." }] };
+  const raw = JSON.stringify({ result: `Review follows.\n\`\`\`json\n${JSON.stringify(payload)}\n\`\`\`\nDone.` });
+  const parsed = parseClaudeJsonResult(raw);
+  assert.deepEqual(parsed.content, payload);
+  assert.equal(parsed.contentRaw, JSON.stringify(payload));
+  assert.deepEqual(validateReviewPayload(parsed.contentRaw), payload);
+});
+
+test("parseClaudeJsonResult preserves ordinary bracket-bearing prose around one review", () => {
+  const payload = { findings: [] };
+  const valid = JSON.stringify(payload);
+  const cases = {
+    "array-index prose": `Checked arr[0].\n${valid}`,
+    "Markdown link prose": `${valid}\nSee [details](https://example.invalid/review).`,
+    "standalone Markdown link": `[details](https://example.invalid/review)\n${valid}`,
+    "footnote prose": `Reference [1].\n${valid}`,
+    "leading footnote prose": `${valid}\n[1] See details.`,
+    "regex prose": `${valid}\nChecked /[a-z]/.`
+  };
+  for (const [name, result] of Object.entries(cases)) {
+    const parsed = parseClaudeJsonResult(JSON.stringify({ result }));
+    assert.equal(parsed.contentRaw, valid, name);
+    assert.deepEqual(parsed.content, payload, name);
+    assert.deepEqual(validateReviewPayload(parsed.contentRaw), payload, name);
+  }
+});
+
+test("bracket-bearing prose cannot turn array-contained or competing objects into a review", () => {
+  const valid = JSON.stringify({ findings: [] });
+  const cases = {
+    "bare array": `[${valid}]`,
+    "prose-wrapped array": `Review follows.\n[${valid}]\nDone.`,
+    "nested array": `Review follows.\n[[${valid}]]\nDone.`,
+    "array with earlier scalar": `Review follows.\n[0,${valid}]\nDone.`,
+    "unclosed enclosing array": `Review follows.\n[${valid}\nDone.`,
+    "empty array after review": `${valid}\n[]`,
+    "empty array before review": `[]\n${valid}`,
+    "incomplete array after review": `${valid}\n[0,`,
+    "array opener after review": `${valid}\n[`,
+    "multiline array fragment": `${valid}\n[\n0,\n`,
+    "competing bracketed object": `Quoted output: [${valid}]\nActual review: ${valid}`,
+    "bracketed multiple objects": `Review follows.\n[${valid},${valid}]\nDone.`
+  };
+  for (const [name, result] of Object.entries(cases)) {
+    assert.throws(() => {
+      const parsed = parseClaudeJsonResult(JSON.stringify({ result }));
+      validateReviewPayload(parsed.contentRaw);
+    }, Error, name);
+  }
+});
+
+test("parseClaudeJsonResult rejects incomplete JSON and malformed optional wrappers", () => {
+  const valid = JSON.stringify({ findings: [] });
+  const cases = {
+    "incomplete second object": `${valid}\n{"findings":[`,
+    "unmatched trailing close": `${valid}}`,
+    "unmatched leading close": `}\n${valid}`,
+    "unbalanced trailing quote": `${valid}\n"unfinished`,
+    "unclosed JSON fence": `\`\`\`json\n${valid}`,
+    "unopened JSON fence": `${valid}\n\`\`\``,
+    "mismatched fence lengths": `\`\`\`\`json\n${valid}\n\`\`\``,
+    "unclosed tool wrapper": `<function_calls>\n${valid}`,
+    "unopened tool wrapper": `</function_calls>\n${valid}`,
+    "reversed tool wrapper": `</function_calls>\n${valid}\n<function_calls>`,
+    "incomplete extra tool token": `<function_calls>\n</function_calls>\n<function_calls\n${valid}`
+  };
+  for (const [name, result] of Object.entries(cases)) {
+    assert.throws(() => parseClaudeJsonResult(JSON.stringify({ result })), Error, name);
+  }
+});
+
+test("parseClaudeJsonResult counts conflicting JSON inside tool markup", () => {
+  const result = `<function_calls>\n<invoke name="Read"><parameter name="input">${JSON.stringify({ findings: [] })}</parameter></invoke>\n</function_calls>\n${JSON.stringify({ findings: [] })}`;
+  assert.throws(() => parseClaudeJsonResult(JSON.stringify({ result })), /Ambiguous JSON Claude result/);
+});
+
+test("wrapped review extraction preserves duplicate keys and schema errors for rejection", () => {
+  for (const invalid of [
+    '{"findings":[{"title":"duplicate must not be normalised away"}],"findings":[]}',
+    '{"findings":[],"unsupported":true}',
+    '{"findings":[{"severity":"SEVERE","title":"Unsupported","fact":"Invalid severity.","recommendation":"Reject it."}]}'
+  ]) {
+    const parsed = parseClaudeJsonResult(JSON.stringify({ result: `Review follows.\n\`\`\`json\n${invalid}\n\`\`\`` }));
+    assert.equal(parsed.contentRaw, invalid);
+    assert.throws(() => validateReviewPayload(parsed.contentRaw));
+  }
+});
+
 test("buildReviewPrompt includes git context and JSON-only contract", () => {
   const prompt = buildReviewPrompt({
     kind: "adversarial-review",
