@@ -1,11 +1,11 @@
 name: Alpha test report
-description: Report a pass, failure or inconclusive v0.1.15 install and first review
+description: Report a pass, failure or inconclusive v0.1.16 install and first review
 title: "[Alpha test]: "
 body:
   - type: markdown
     attributes:
       value: |
-        Use this form for one v0.1.15 alpha test in a public, disposable or otherwise non-sensitive repository.
+        Use this form for one v0.1.16 alpha test in a public, disposable or otherwise non-sensitive repository.
 
         The fixed test should take about 15–20 minutes.
 
@@ -128,7 +128,7 @@ body:
     attributes:
       label: Safety confirmation
       options:
-        - label: I tested v0.1.15 using a read-only review in a public, disposable or otherwise non-sensitive repository.
+        - label: I tested v0.1.16 using a read-only review in a public, disposable or otherwise non-sensitive repository.
           required: true
         - label: This report and its attachments contain no confidential or private source code, credentials, tokens, cookies, session data, private prompts, personal information, unredacted screenshots or full unsanitised logs.
           required: true

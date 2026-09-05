@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import fs from "node:fs";
+import { assertReleaseVersionAlignment } from "./lib/release-version.mjs";
 
 const manifest = JSON.parse(fs.readFileSync("plugins/claude-code-advisor/.codex-plugin/plugin.json", "utf8"));
 const marketplace = JSON.parse(fs.readFileSync(".agents/plugins/marketplace.json", "utf8"));
@@ -18,8 +19,13 @@ const supervisor = fs.readFileSync("plugins/claude-code-advisor/scripts/claude-s
 const groupWorker = fs.readFileSync("plugins/claude-code-advisor/scripts/claude-group-worker.mjs", "utf8");
 const runtime = fs.readFileSync("plugins/claude-code-advisor/scripts/lib/runtime.mjs", "utf8");
 
+assertReleaseVersionAlignment({
+  packageVersion: packageJson.version,
+  manifestVersion: manifest.version,
+  readme,
+});
+
 assert.equal(manifest.name, "claude-code-advisor");
-assert.equal(manifest.version, packageJson.version);
 assert.equal(manifest.skills, "./skills/");
 assert.equal(manifest.interface?.displayName, "Claude Code Advisor");
 assert.deepEqual(manifest.interface?.capabilities, ["Read", "Write"]);
@@ -106,12 +112,13 @@ const alphaReportUrl = "https://github.com/BoldNewMedia/claude-plugin-codex/issu
 assert.ok(readme.includes(alphaReportUrl));
 assert.ok(alphaGuide.includes(alphaReportUrl));
 assert.match(readme, /Authenticated Claude execution and installed Codex routing were\s+not rerun at that exact commit/);
-assert.match(alphaGuide, /three independent testers/);
+assert.match(alphaGuide, /Reporting is entirely optional/);
 assert.match(alphaGuide, /native Windows/);
 assert.match(alphaGuide, /WSL/);
-assert.match(alphaGuide, /15–20-minute test/);
+assert.match(alphaGuide, /Optional 15–20-minute check/);
 assert.match(alphaGuide, /public, disposable or otherwise non-sensitive Git repository/);
-assert.match(alphaGuide, /10 external installations/);
+assert.doesNotMatch(readme, /three-person pilot/);
+assert.doesNotMatch(alphaGuide, /three independent testers|10 external installations|repeat use by at least five testers/);
 assert.doesNotMatch(alphaGuide, /bug form or the alpha feedback issue/);
 assert.match(alphaReport, /- Pass\n/);
 assert.match(alphaReport, /- Failure\n/);
