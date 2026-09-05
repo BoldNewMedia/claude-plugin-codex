@@ -117,7 +117,15 @@ commands. The guaranteed Codex surface is the `$claude` skill mention.
 
 ## Routing
 
-- `setup`: run the companion setup command and show the result.
+- `setup`: run the companion setup command and show the result. Authentication
+  is checked in the current process. If it is unavailable, distinguish host
+  permissions from the launcher and the user's Claude login. Compare the same
+  installed companion in a normal terminal when evidence is available. Use only
+  supported host approval or execution controls and verify their effect; do not
+  assume a requested escalation changed the sandbox. Network access and a
+  writable state root do not grant credential access. If no authorised route is
+  available, report the blocker instead of repeatedly asking for login, copying
+  credentials, or adding a launcher to bypass host restrictions.
 - `advise`: use for architecture questions, second opinions, and checker work.
   Use `--background` for substantive prompts, large context, or anything likely
   to need more than one short answer.

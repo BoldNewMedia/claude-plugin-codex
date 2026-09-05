@@ -9,6 +9,7 @@ import test from "node:test";
 import {
   classifyCommandFailure,
   classifyRoutedOutput,
+  inspectRoutedRun,
   renderE2eFailure
 } from "./e2e-codex-skill.mjs";
 
@@ -76,7 +77,7 @@ test("Codex E2E command and routed-output classifiers fail closed", () => {
   assert.equal(classifyRoutedOutput("PASS\n"), "authenticated");
   assert.equal(
     classifyRoutedOutput("Claude job advise-mabc123-abc123 failed.\nNot logged in · Please run /login\n"),
-    "authentication-unavailable"
+    "unexpected"
   );
   for (const unsafe of [
     "PASS",
@@ -87,6 +88,141 @@ test("Codex E2E command and routed-output classifiers fail closed", () => {
     "Claude job advise-mabc123-abc123 failed.\nNot logged in · Please run /login\nextra"
   ]) {
     assert.equal(classifyRoutedOutput(unsafe), "unexpected", unsafe);
+  }
+});
+
+function routedFixture(t, { authenticated = false, legacy = false } = {}) {
+  const root = fs.mkdtempSync(path.join(fs.realpathSync(os.tmpdir()), "claude-routing-fixture-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const stateRoot = path.join(root, "state");
+  const workspaceRoot = path.join(root, "workspace");
+  const stateDir = resolveStateDir(workspaceRoot, { CODEX_THREAD_ID: "fixture" }, stateRoot);
+  const capabilities = {
+    version: { raw: "2.1.234 (Claude Code)", major: 2, minor: 1, patch: 234, supported: true },
+    auth: legacy ? { loggedIn: authenticated } : { loggedIn: authenticated, status: authenticated ? "available" : "unavailable", scope: "current-process" },
+    print: authenticated,
+    background: authenticated
+  };
+  if (!legacy) capabilities.printProbe = authenticated ? { status: "passed", reason: null } : { status: "skipped", reason: "authentication-unavailable" };
+  const setup = { ready: authenticated, node: { version: "v24.19.0", supported: true }, capabilities, stateDir };
+  const job = {
+    id: "advise-mabc123-abc123", kind: "advise", status: authenticated ? "completed" : "failed", write: false, workspaceRoot,
+    result: authenticated ? "PASS" : "Claude command failed with status 1."
+  };
+  const state = { ...emptyState(), capabilities, jobs: [job] };
+  const launcher = "/fixture/claude-code-advisor/0.1.16/scripts/claude-companion.mjs";
+  const events = [
+    { type: "item.completed", item: { type: "command_execution", command: `node '${launcher}' setup --json`, exit_code: 0 } },
+    { type: "item.completed", item: {
+      type: "command_execution", command: `node '${launcher}' advise --model sonnet --max-turns 1 --timeout-ms 120000 --no-background-fallback --effort xhigh 'Return exactly PASS.'`, exit_code: 0,
+      aggregated_output: authenticated ? "PASS\n" : `Claude job ${job.id} failed.\n${job.result}\n`
+    } }
+  ];
+  return { setup, state, job, events, stateRoot, workspaceRoot, run() {
+    saveState(stateDir, state, { pathBoundary: stateRoot });
+    events[0].item.aggregated_output = JSON.stringify(setup);
+    return inspectRoutedRun(events.map((event) => JSON.stringify(event)).join("\n"), { stateRoot, workspaceRoot });
+  } };
+}
+
+function recordedShellCommand(command, shell = "/bin/bash", flag = "-c") {
+  return `${shell} ${flag} ${JSON.stringify(command)}`;
+}
+
+test("Codex routing binds exact PASS and unavailable authentication to terminal persisted jobs", (t) => {
+  for (const legacy of [false, true]) {
+    assert.equal(routedFixture(t, { authenticated: true, legacy }).run(), "authenticated");
+    assert.equal(routedFixture(t, { legacy }).run(), "authentication-unavailable");
+  }
+  const printTimeout = routedFixture(t, { authenticated: true });
+  printTimeout.setup.ready = false;
+  printTimeout.setup.capabilities.print = false;
+  printTimeout.setup.capabilities.background = false;
+  printTimeout.setup.capabilities.printProbe = { status: "failed", reason: "command-timeout" };
+  assert.equal(printTimeout.run(), "authenticated", "a later exact PASS can verify routing after a setup print timeout");
+  assert.equal(classifyRoutedOutput("Claude job advise-mabc123-abc123 failed.\nClaude command failed with status 1.\n"), "unexpected");
+});
+
+test("Codex routing accepts one recorded execution shell around bounded direct commands", (t) => {
+  for (const shell of ["/bin/bash", "/bin/zsh"]) {
+    for (const flag of ["-c", "-lc"]) {
+      const fixture = routedFixture(t, { legacy: true });
+      for (const event of fixture.events) event.item.command = recordedShellCommand(event.item.command, shell, flag);
+      assert.equal(fixture.run(), "authentication-unavailable");
+    }
+  }
+});
+
+test("Codex routing rejects malformed, failed and contradictory setup evidence", (t) => {
+  const changes = [
+    (f) => { f.events[0].item.exit_code = 1; },
+    (f) => { f.setup.node.supported = false; },
+    (f) => { f.setup.node.version = "v16.20.0"; },
+    (f) => { f.setup.capabilities.version.supported = false; },
+    (f) => { f.setup.capabilities.version.major = 3; },
+    (f) => { f.setup.capabilities.auth.loggedIn = "false"; },
+    (f) => { f.setup.capabilities.auth.status = "check-failed"; },
+    (f) => { f.setup.capabilities.auth.scope = "other-process"; },
+    (f) => { f.setup.capabilities.auth.error = "probe-error"; },
+    (f) => { f.setup.capabilities.auth.loggedIn = true; },
+    (f) => { f.setup.capabilities.print = true; },
+    (f) => { f.setup.capabilities.background = true; },
+    (f) => { f.setup.capabilities.printProbe = { status: "failed", reason: "command-error" }; },
+    (f) => { f.setup.ready = true; },
+    (f) => { f.setup.capabilities.auth = { loggedIn: false }; },
+    (f) => { f.setup.stateDir = path.join(f.stateRoot, "other-workspace", "workspace"); }
+  ];
+  for (const change of changes) {
+    const fixture = routedFixture(t);
+    change(fixture);
+    assert.throws(() => fixture.run(), /Codex routing E2E failed/u);
+    assert.ok(fs.existsSync(fixture.stateRoot), "rejected evidence is preserved");
+  }
+  const legacy = routedFixture(t, { legacy: true });
+  for (const event of legacy.events) event.item.command = event.item.command.replace("/0.1.16/", "/0.1.15/");
+  assert.throws(() => legacy.run(), /Codex routing E2E failed/u);
+  const available = routedFixture(t, { authenticated: true });
+  available.job.status = "failed";
+  available.job.result = "Claude command failed with status 1.";
+  available.events[1].item.aggregated_output = `Claude job ${available.job.id} failed.\n${available.job.result}\n`;
+  assert.throws(() => available.run(), /Codex routing E2E failed/u);
+  const malformed = routedFixture(t);
+  malformed.run();
+  malformed.events[0].item.aggregated_output = "Not JSON";
+  assert.throws(() => inspectRoutedRun(malformed.events.map((event) => JSON.stringify(event)).join("\n"), malformed), /Codex routing E2E failed/u);
+});
+
+test("Codex routing requires bounded commands and preserves live or ambiguous state", (t) => {
+  const changes = [
+    (f) => { f.events[1].item.command = f.events[1].item.command.replace("--no-background-fallback", ""); },
+    ...["--background", "--write", "--allow-web", "--allow-mcp"].map((flag) => (f) => { f.events[1].item.command += ` ${flag}`; }),
+    (f) => { f.events[1].item.command = `env OTHER=value ${f.events[1].item.command}`; },
+    (f) => { f.events[1].item.command = `cd /tmp && ${f.events[1].item.command}`; },
+    (f) => { f.events[1].item.command = recordedShellCommand(recordedShellCommand(f.events[1].item.command)); },
+    (f) => { f.events[1].item.command = `${recordedShellCommand(f.events[1].item.command)} extra`; },
+    (f) => { f.events[1].item.command = recordedShellCommand(f.events[1].item.command, "/bin/sh"); },
+    (f) => { f.events[1].item.command = recordedShellCommand(f.events[1].item.command, "/bin/bash", "-ic"); },
+    (f) => { f.events[1].item.command = recordedShellCommand(`env OTHER=value ${f.events[1].item.command}`); },
+    (f) => { f.events[1].item.command = recordedShellCommand(`cd /tmp && ${f.events[1].item.command}`); },
+    (f) => { f.events.push(structuredClone(f.events[1])); },
+    (f) => { f.events.reverse(); },
+    (f) => { f.events[1].item.exit_code = 1; },
+    (f) => { f.events[1].type = "item.started"; },
+    (f) => { f.job.status = "running"; },
+    (f) => { f.job.lifecycleState = "running"; },
+    (f) => { f.job.transport = "supervised"; },
+    (f) => { f.state.jobs.push({ ...f.job, id: "advise-other-123456" }); },
+    (f) => { f.job.write = true; },
+    (f) => { f.job.workspaceRoot = "/another-workspace"; },
+    (f) => { f.job.id = "advise-other-123456"; },
+    (f) => { f.events[1].item.aggregated_output = "PASS\n"; },
+    (f) => { f.state.capabilities = null; }
+  ];
+  for (const change of changes) {
+    const fixture = routedFixture(t);
+    change(fixture);
+    assert.throws(() => fixture.run(), /Codex routing E2E failed/u);
+    assert.ok(fs.existsSync(fixture.stateRoot), "unverified terminal state must not be deleted");
   }
 });
 
