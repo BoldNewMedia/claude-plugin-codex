@@ -2,6 +2,25 @@
 
 All notable public changes to Claude Code Advisor for Codex are recorded here.
 
+## 0.1.17 - 2026-09-06
+
+- diagnose authentication in the invoking process and bound the tool-free
+  readiness probe, with clear host-sandbox guidance
+- publish foreground review findings only after successful provider-envelope,
+  session and findings validation, retry invalid formatting once, and prevent
+  failed reviews from falling back to background execution
+- withhold unproven historical review results across public readback while
+  preserving stored evidence and fixed, non-disclosing failure explanations
+- require validated review authority before resume and align review and
+  non-review resume discovery with the resolver
+- reject `--write` for review commands before side effects
+- return a nonzero exit for failed foreground advice, prepared tasks and rescue,
+  including resumed jobs, while preserving successful background-launch exits
+- make alpha reports optional, align release metadata and strengthen setup,
+  routing, review, resume and lifecycle regression coverage
+- verify the updated failure exit contract in Codex routing checks without
+  confusing unavailable nested authentication with authenticated success
+
 ## 0.1.16 - 2026-09-04
 
 - give an automatic foreground-timeout fallback the normal 10-minute
