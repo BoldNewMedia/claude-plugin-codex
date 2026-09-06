@@ -995,6 +995,9 @@ function failReviewJob(ctx, job, classification) {
 
 async function handleReview(argv, kind) {
   const { options, positionals } = parseArgs(argv);
+  if (options.write) {
+    throw new Error(`${kind} is read-only and does not support --write. Use advise, do or rescue --write for write-capable work.`);
+  }
   const ctx = currentContext(options);
   const focus = positionals.join(" ").trim();
   const prompt = buildReviewPrompt({

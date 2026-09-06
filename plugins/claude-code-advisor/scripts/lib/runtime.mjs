@@ -648,6 +648,9 @@ export function buildClaudeArgs(options) {
   if (write === "implicit") {
     throw new Error("Write-capable Claude work requires explicit --write.");
   }
+  if (write && (mode === "review" || mode === "adversarial-review")) {
+    throw new Error(`${mode} is read-only and does not support --write. Use advise, do or rescue --write for write-capable work.`);
+  }
   if (!prompt || !String(prompt).trim()) {
     throw new Error("A prompt is required.");
   }
