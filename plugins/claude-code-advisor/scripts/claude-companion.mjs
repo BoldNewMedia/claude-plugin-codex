@@ -971,6 +971,7 @@ async function handleTaskCommand(argv, kind) {
     },
     options.json
   );
+  if (job.status === "failed") process.exitCode = 1;
 }
 
 async function handleAdvise(argv) {

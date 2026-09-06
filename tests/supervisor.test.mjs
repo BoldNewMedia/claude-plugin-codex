@@ -832,7 +832,7 @@ supervisedTest("foreground resume rejects missing, malformed and mismatched prov
     const resumed = runCompanion(harness, [
       "rescue", "--resume", "--job-id", initial.jobId, `second-${candidate.name}`
     ]);
-    assert.equal(resumed.status, 0, resumed.stderr);
+    assert.equal(resumed.status, 1, resumed.stderr);
     const payload = JSON.parse(resumed.stdout);
     assert.equal(payload.status, "failed", candidate.name);
     assert.equal(payload.output, "Claude returned an invalid resumed result envelope.", candidate.name);

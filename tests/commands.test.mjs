@@ -579,12 +579,13 @@ if (args.includes("-p")) {
 console.error("unsupported"); process.exit(2);
 `);
   const stateRoot = fs.mkdtempSync(path.join(os.tmpdir(), "claude-state-"));
-  const stdout = execFileSync(process.execPath, [companion, "do", "inspect local code", "--json"], {
+  const result = spawnSync(process.execPath, [companion, "do", "inspect local code", "--json"], {
     env: { ...process.env, PATH: `${fake.dir}:${process.env.PATH}`, CLAUDE_COMPANION_STATE_ROOT: stateRoot },
     cwd: stateRoot,
     encoding: "utf8"
   });
-  const payload = JSON.parse(stdout);
+  assert.equal(result.status, 1);
+  const payload = JSON.parse(result.stdout);
 
   assert.equal(payload.status, "failed");
   assert.match(payload.output, /Claude hit the max-turn limit/);
