@@ -306,6 +306,12 @@ validated provider JSON envelope, and the resumed envelope must return the same
 UUID. Legacy ambiguous and in-flight jobs are not reconciled from logs or
 resumed. Foreground and background `rescue --resume` never silently start a new
 conversation. A read-only command cannot resume a write-capable session.
+Stored review and adversarial-review jobs must also have validated findings and
+consistent completion and provider provenance before either foreground or
+background resume. Unsupported review authority is rejected before creating a
+new job or invoking Claude, and the stored source job is preserved.
+`resume-candidate` reports these reviews as unavailable until their authority
+passes the same validation.
 
 Claude Code must already be installed and authenticated on the host:
 

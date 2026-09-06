@@ -713,6 +713,7 @@ function completeJob(ctx, job, patch) {
 
 function resolveJobResumeReference(ctx, candidate, options = {}) {
   if (
+    (!isReviewJob(candidate) || readValidatedReviewResult(candidate)) &&
     [candidate.lifecycleState, candidate.status].includes("completed") &&
     candidate.resultSource === "provider-json" &&
     isCanonicalResumeReference(candidate?.resumeSessionId)
@@ -1468,7 +1469,7 @@ function handleResumeCandidate(argv) {
     return;
   }
   output({
-    available: Boolean(candidate),
+    available: Boolean(candidate && (!isReviewJob(candidate) || readValidatedReviewResult(candidate))),
     candidate: publicJob(candidate),
     candidates: candidate ? [] : ctx.state.jobs.map(publicJob)
   }, options.json);
