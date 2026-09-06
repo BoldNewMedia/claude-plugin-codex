@@ -69,7 +69,7 @@ that Claude is logged out in your normal terminal.
 
 The live print probe runs only after a supported CLI and successful auth check.
 It uses the configured default model, low effort, no tools, strict empty MCP
-configuration, no Chrome, and plan mode. `printProbe` reports whether the probe
+configuration, no Chrome, and default permission mode. `printProbe` reports whether the probe
 passed, failed or was skipped, with a fixed reason. Local version and auth checks
 have 10-second deadlines; the live print probe has a 60-second deadline and
 reports `command-timeout` separately from other command errors. Auth and print
@@ -179,6 +179,15 @@ relying on structured review. Working-tree and `--base` reviews also stop
 before Claude is invoked if Git fails or the complete diff exceeds 1 MiB.
 Narrow or split the change and rerun; incomplete diffs are never downgraded to
 stat-only reviews.
+
+By default, both review commands disable built-in tools, isolate MCP with an
+empty configuration, and use default permission mode. These restrictions keep
+them read-only without invoking the interactive Plan Mode workflow, which can
+conflict with the JSON findings response. They still reject `--write` and retain
+no Chrome. Explicit `--allow-mcp` keeps the existing Plan Mode restriction;
+`--tools ""` does not restrict MCP tools. The
+[Claude CLI reference](https://code.claude.com/docs/en/cli-reference) documents
+the separate built-in tool and MCP controls.
 
 Both review commands publish completed findings only after Claude exits
 successfully and returns a valid success envelope containing exactly one complete

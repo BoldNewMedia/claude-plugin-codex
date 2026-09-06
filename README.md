@@ -78,7 +78,7 @@ Alpha. Use it on real work only with normal review and source-control controls.
 The stable command form is `$claude`. If your Codex UI exposes the skill as
 `/claude`, you can use that as an alias.
 
-Current public release: [`v0.1.17`](https://github.com/BoldNewMedia/claude-plugin-codex/releases/tag/v0.1.17).
+Current public release: [`v0.1.18`](https://github.com/BoldNewMedia/claude-plugin-codex/releases/tag/v0.1.18).
 
 | Component | Verification scope |
 |---|---|
@@ -97,7 +97,7 @@ nested sandbox; that outcome verifies routing only. Independent platform
 evidence remains incomplete, especially for WSL and native Windows.
 
 If you already use Codex and authenticated Claude Code and choose to test
-`v0.1.17`, run `$claude setup` and one foreground `$claude review` in a public,
+`v0.1.18`, run `$claude setup` and one foreground `$claude review` in a public,
 disposable or otherwise non-sensitive repository. You may then submit an
 [optional structured alpha test report](https://github.com/BoldNewMedia/claude-plugin-codex/issues/new?template=alpha_test_report.yml).
 See the [alpha testing guide](docs/alpha-testing.md) for the optional check and

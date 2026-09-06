@@ -16,7 +16,7 @@ const sessionId = "11111111-1111-4111-8111-111111111111";
 const threadId = "read-only-review-test";
 const diagnostic = (kind) => `${kind} is read-only and does not support --write. Use advise, do or rescue --write for write-capable work.`;
 
-function fixture(t, { git = true } = {}) {
+function fixture(t, { git = true, planProse = false } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "claude-read-only-review-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const repo = path.join(root, "repo");
@@ -39,9 +39,13 @@ const fs = require("node:fs");
 const args = process.argv.slice(2);
 const stdin = fs.readFileSync(0, "utf8");
 fs.appendFileSync(${JSON.stringify(invocationLog)}, JSON.stringify({ args, stdin }) + "\\n");
-process.stdout.write(${JSON.stringify(JSON.stringify({
+const envelope = ${JSON.stringify({
     type: "result", subtype: "success", is_error: false, session_id: sessionId, result: JSON.stringify({ findings: [] })
-  }))});
+  })};
+if (${planProse} && args[args.indexOf("--permission-mode") + 1] === "plan") {
+  envelope.result = "I must follow the interactive Plan Mode workflow before returning findings.";
+}
+process.stdout.write(JSON.stringify(envelope));
 `, { mode: 0o755 });
   // Observe the launch boundary itself so a rejected background request cannot
   // pass merely because a detached supervisor has not invoked Claude yet.
@@ -116,7 +120,7 @@ function assertRejected(f, args, message) {
 }
 
 function assertIsolation(args, write = false) {
-  assert.equal(args[args.indexOf("--permission-mode") + 1], write ? "default" : "plan");
+  assert.equal(args[args.indexOf("--permission-mode") + 1], "default");
   assert.equal(args.includes("--tools"), !write);
   if (!write) assert.equal(args[args.indexOf("--tools") + 1], "");
   assert.equal(args.includes("--model"), false, "retain the configured provider default model");
@@ -127,6 +131,19 @@ function assertIsolation(args, write = false) {
 }
 
 for (const kind of ["review", "adversarial-review"]) {
+  test(`${kind} avoids interactive planning without enabling tools`, (t) => {
+    // Real native reviews can refuse JSON in Plan Mode, even with no tools.
+    // The fixture models that provider response without invoking a real writer.
+    const f = fixture(t, { planProse: true });
+    const response = f.invoke([kind, "Synthetic focus", "--json"]);
+    assert.equal(response.status, 0, response.stderr);
+    assert.deepEqual(JSON.parse(response.stdout).result, { findings: [] });
+    assert.equal(f.invocations().length, 1, "complete without a formatting retry");
+    assertIsolation(f.invocations()[0].args);
+    assert.equal(f.jobs()[0].write, false);
+    assert.equal(f.jobs()[0].resultSource, "provider-json");
+  });
+
   test(`${kind} rejects --write outside Git before initial state creation`, (t) => {
     const f = fixture(t, { git: false });
     assertRejected(f, [kind, "--write", "--json"], diagnostic(kind));

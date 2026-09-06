@@ -222,7 +222,7 @@ for (const kind of ["review", "adversarial-review"]) {
           assert.equal(calls.length, 1);
           const { args, stdin } = calls[0];
           assert.equal(args[args.indexOf("--resume") + 1], sessionId);
-          assert.equal(args[args.indexOf("--permission-mode") + 1], "plan");
+          assert.equal(args[args.indexOf("--permission-mode") + 1], "default");
           assert.equal(args[args.indexOf("--output-format") + 1], "json");
           assert.equal(args[args.indexOf("--effort") + 1], "xhigh");
           assert.equal(args.includes("--model"), false);

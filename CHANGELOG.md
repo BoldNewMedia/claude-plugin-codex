@@ -2,6 +2,18 @@
 
 All notable public changes to Claude Code Advisor for Codex are recorded here.
 
+## 0.1.18 - 2026-09-06
+
+- keep default structured reviews out of interactive Plan Mode, which can cause
+  Claude to refuse the required JSON findings response even when tools are disabled
+- retain the empty review tool set, strict empty MCP configuration, no Chrome,
+  configured model, xhigh effort and strict result/session validation
+- use the same tool-free mode for the setup readiness probe; advice, prepared
+  tasks, rescue and explicitly opted-in MCP reviews keep their existing
+  permission modes
+- add regressions for the observed planning response and preserve failed-result,
+  read-only and resume authority checks
+
 ## 0.1.17 - 2026-09-06
 
 - diagnose authentication in the invoking process and bound the tool-free
