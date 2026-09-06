@@ -78,25 +78,26 @@ Alpha. Use it on real work only with normal review and source-control controls.
 The stable command form is `$claude`. If your Codex UI exposes the skill as
 `/claude`, you can use that as an alias.
 
-Current public release: [`v0.1.16`](https://github.com/BoldNewMedia/claude-plugin-codex/releases/tag/v0.1.16).
+Current public release: [`v0.1.17`](https://github.com/BoldNewMedia/claude-plugin-codex/releases/tag/v0.1.17).
 
-| Component | Verified status |
+| Component | Verification scope |
 |---|---|
-| Codex CLI | Marketplace commands confirmed with `0.147.0`; installed routing was previously verified with `0.130.0` |
-| Claude Code CLI | An unauthenticated smoke passed with `2.1.234` during `v0.1.16` release preparation; an authenticated local account is required for a real review |
-| Node.js | Exact-release CI passed on 20, 22 and 24; runtime minimum is 18.18 |
-| macOS | Deterministic coverage and supervised background support exist; no independent exact-release report is recorded |
-| Linux | Exact-release CI and deterministic coverage exist; no independent foreground report is recorded |
-| WSL | Not yet independently verified; it is recorded separately from native Windows |
+| Codex CLI | Marketplace commands confirmed with `0.147.0`; use the release notes for installed-routing results |
+| Claude Code CLI | Local checks use `2.1.234`; an authenticated local account must be accessible to the invoking process |
+| Node.js | CI covers 20, 22 and 24; runtime minimum is 18.18 |
+| macOS | Deterministic coverage and supervised background support exist; maintainer checks are separate from independent reports |
+| Linux | CI and deterministic coverage exist; authenticated foreground use has not been independently verified |
+| WSL | Not yet independently verified; recorded separately from native Windows |
 | Native Windows | Not yet independently verified; supervised background mode is unavailable |
 
-Deterministic tests and Node.js 20, 22 and 24 CI passed at the `v0.1.16`
-release commit. Authenticated Claude execution and installed Codex routing were
-not rerun at that exact commit. Independent platform evidence remains
-incomplete, especially for WSL and native Windows.
+See the GitHub release notes for exact-commit checks, authenticated execution
+and installed Codex routing evidence. Deterministic tests alone do not establish
+authenticated use. The routing test may report unavailable authentication in its
+nested sandbox; that outcome verifies routing only. Independent platform
+evidence remains incomplete, especially for WSL and native Windows.
 
 If you already use Codex and authenticated Claude Code and choose to test
-`v0.1.16`, run `$claude setup` and one foreground `$claude review` in a public,
+`v0.1.17`, run `$claude setup` and one foreground `$claude review` in a public,
 disposable or otherwise non-sensitive repository. You may then submit an
 [optional structured alpha test report](https://github.com/BoldNewMedia/claude-plugin-codex/issues/new?template=alpha_test_report.yml).
 See the [alpha testing guide](docs/alpha-testing.md) for the optional check and

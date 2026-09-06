@@ -184,7 +184,7 @@ export function inspectRoutedRun(execOutput, { stateRoot, workspaceRoot }) {
   const adviseInvocation = routedInvocation(adviseCommand);
   if (setupInvocation.kind !== "setup" || adviseInvocation.kind !== "advise"
     || setupInvocation.launcher !== adviseInvocation.launcher) throw e2eFailure("routed-command", "routing-missing");
-  if (setupCommand.exit_code !== 0 || adviseCommand.exit_code !== 0) throw e2eFailure("routed-command", "companion-failed");
+  if (setupCommand.exit_code !== 0) throw e2eFailure("routed-command", "companion-failed");
   let setup;
   try { setup = JSON.parse(setupCommand.aggregated_output); } catch { throw e2eFailure("routed-setup", "invalid-setup"); }
   const authentication = setupAuthentication(setup, setupInvocation.launcher);
@@ -205,6 +205,11 @@ export function inspectRoutedRun(execOutput, { stateRoot, workspaceRoot }) {
   if (classification === "unexpected" || (classification === "authenticated" && (job.status !== "completed" || job.result !== "PASS"))) {
     throw e2eFailure("routed-output", "unexpected-result");
   }
+  // v0.1.16 returned zero for failed foreground jobs. New installs return one.
+  // Accept that failure only after binding setup, output and terminal job state.
+  const legacyExit = /\/claude-code-advisor\/0\.1\.16\/scripts\/claude-companion\.mjs$/u.test(adviseInvocation.launcher);
+  const expectedExit = classification === "authentication-unavailable" && !legacyExit ? 1 : 0;
+  if (adviseCommand.exit_code !== expectedExit) throw e2eFailure("routed-command", "companion-failed");
   return classification;
 }
 

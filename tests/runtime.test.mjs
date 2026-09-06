@@ -110,11 +110,11 @@ function routedFixture(t, { authenticated = false, legacy = false } = {}) {
     result: authenticated ? "PASS" : "Claude command failed with status 1."
   };
   const state = { ...emptyState(), capabilities, jobs: [job] };
-  const launcher = "/fixture/claude-code-advisor/0.1.16/scripts/claude-companion.mjs";
+  const launcher = `/fixture/claude-code-advisor/${legacy ? "0.1.16" : "0.1.17"}/scripts/claude-companion.mjs`;
   const events = [
     { type: "item.completed", item: { type: "command_execution", command: `node '${launcher}' setup --json`, exit_code: 0 } },
     { type: "item.completed", item: {
-      type: "command_execution", command: `node '${launcher}' advise --model sonnet --max-turns 1 --timeout-ms 120000 --no-background-fallback --effort xhigh 'Return exactly PASS.'`, exit_code: 0,
+      type: "command_execution", command: `node '${launcher}' advise --model sonnet --max-turns 1 --timeout-ms 120000 --no-background-fallback --effort xhigh 'Return exactly PASS.'`, exit_code: authenticated || legacy ? 0 : 1,
       aggregated_output: authenticated ? "PASS\n" : `Claude job ${job.id} failed.\n${job.result}\n`
     } }
   ];
@@ -141,6 +141,14 @@ test("Codex routing binds exact PASS and unavailable authentication to terminal 
   printTimeout.setup.capabilities.printProbe = { status: "failed", reason: "command-timeout" };
   assert.equal(printTimeout.run(), "authenticated", "a later exact PASS can verify routing after a setup print timeout");
   assert.equal(classifyRoutedOutput("Claude job advise-mabc123-abc123 failed.\nClaude command failed with status 1.\n"), "unexpected");
+});
+
+test("Codex routing rejects failure exits for successful and legacy invocations", (t) => {
+  for (const options of [{ authenticated: true }, { legacy: true }]) {
+    const fixture = routedFixture(t, options);
+    fixture.events[1].item.exit_code = 1;
+    assert.throws(() => fixture.run(), /Codex routing E2E failed/u);
+  }
 });
 
 test("Codex routing accepts one recorded execution shell around bounded direct commands", (t) => {
@@ -206,7 +214,7 @@ test("Codex routing requires bounded commands and preserves live or ambiguous st
     (f) => { f.events[1].item.command = recordedShellCommand(`cd /tmp && ${f.events[1].item.command}`); },
     (f) => { f.events.push(structuredClone(f.events[1])); },
     (f) => { f.events.reverse(); },
-    (f) => { f.events[1].item.exit_code = 1; },
+    ...[0, 2, null, "1"].map((exitCode) => (f) => { f.events[1].item.exit_code = exitCode; }),
     (f) => { f.events[1].type = "item.started"; },
     (f) => { f.job.status = "running"; },
     (f) => { f.job.lifecycleState = "running"; },

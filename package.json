@@ -1,6 +1,6 @@
 {
   "name": "claude-plugin-codex",
-  "version": "0.1.16",
+  "version": "0.1.17",
   "description": "Bring local Claude Code into Codex for reviews, prepared tasks, advice, and rescue work.",
   "type": "module",
   "private": true,
