@@ -18,6 +18,7 @@ import {
   buildBackgroundArgs,
   buildBackgroundResultPrompt,
   buildClaudeArgs,
+  EMPTY_MCP_CONFIG,
   buildReviewPrompt,
   classifySupervisorFailureEvent,
   DEFAULT_BACKGROUND_TIMEOUT_MS,
@@ -307,21 +308,23 @@ test("selectResumeCandidate blocks read-only resume of write-capable jobs", () =
 });
 
 test("buildClaudeArgs enforces read-only review tool restrictions", () => {
-  const args = buildClaudeArgs({
-    mode: "review",
-    prompt: "review this",
-    outputFormat: "json",
-    maxTurns: 1,
-    write: false
-  });
+  for (const mode of ["review", "adversarial-review"]) {
+    const args = buildClaudeArgs({
+      mode,
+      prompt: "review this",
+      outputFormat: "json",
+      maxTurns: 1,
+      write: false
+    });
 
-  assert.equal(args[0], "-p");
-  assert.equal(args.includes("review this"), false);
-  assert.deepEqual(args.slice(0, 3), ["-p", "--output-format", "json"]);
-  assert.ok(args.includes("--tools"));
-  assert.ok(args.includes(""));
-  assert.ok(args.includes("--output-format"));
-  assert.ok(args.includes("json"));
+    assert.equal(args[0], "-p");
+    assert.equal(args.includes("review this"), false);
+    assert.deepEqual(args.slice(0, 3), ["-p", "--output-format", "json"]);
+    assert.deepEqual(args.slice(args.indexOf("--tools"), args.indexOf("--tools") + 2), ["--tools", ""]);
+    assert.equal(args[args.indexOf("--permission-mode") + 1], "default");
+    assert.ok(args.includes("--output-format"));
+    assert.ok(args.includes("json"));
+  }
 });
 
 test("buildClaudeArgs requires explicit write for write-capable mode", () => {
@@ -329,6 +332,22 @@ test("buildClaudeArgs requires explicit write for write-capable mode", () => {
     () => buildClaudeArgs({ mode: "advise", prompt: "edit files", write: "implicit" }),
     /explicit --write/
   );
+});
+
+test("review MCP opt-in preserves its existing planning restrictions", () => {
+  for (const mode of ["review", "adversarial-review"]) {
+    for (const allowMcp of [false, true]) {
+      const args = buildClaudeArgs({ mode, prompt: "Review", allowMcp, effort: "xhigh" });
+      assert.equal(args[args.indexOf("--tools") + 1], "");
+      assert.equal(args[args.indexOf("--permission-mode") + 1], allowMcp ? "plan" : "default");
+      assert.equal(args.includes("--mcp-config"), !allowMcp);
+      assert.equal(args.includes("--strict-mcp-config"), !allowMcp);
+      if (!allowMcp) assert.equal(args[args.indexOf("--mcp-config") + 1], EMPTY_MCP_CONFIG);
+      assert.equal(args.includes("--no-chrome"), true);
+      assert.equal(args.includes("--model"), false);
+      assert.equal(args[args.indexOf("--effort") + 1], "xhigh");
+    }
+  }
 });
 
 test("buildClaudeArgs passes explicit effort", () => {

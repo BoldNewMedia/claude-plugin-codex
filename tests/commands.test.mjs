@@ -102,7 +102,7 @@ console.error("unsupported"); process.exit(2);
     ["--effort", "low"],
     ["--mcp-config", '{"mcpServers":{}}'],
     ["--tools", ""],
-    ["--permission-mode", "plan"]
+    ["--permission-mode", "default"]
   ]) {
     assert.notEqual(probe.args.indexOf(flag), -1, flag);
     assert.equal(probe.args[probe.args.indexOf(flag) + 1], value, flag);

@@ -677,7 +677,9 @@ export function buildClaudeArgs(options) {
   if (write) {
     args.push("--permission-mode", "default");
   } else if (mode === "review" || mode === "adversarial-review") {
-    args.push("--tools", "", "--permission-mode", "plan");
+    // With no built-in tools and isolated MCP, reviews need no interactive
+    // planning workflow. Preserve Plan Mode for explicitly allowed MCP tools.
+    args.push("--tools", "", "--permission-mode", allowMcp ? "plan" : "default");
   } else {
     args.push("--tools", readToolsForMode(mode, allowWeb), "--permission-mode", "plan");
   }
