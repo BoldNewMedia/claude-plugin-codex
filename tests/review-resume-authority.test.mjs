@@ -310,19 +310,19 @@ test("ordinary non-review resume retains its existing completed-lifecycle semant
   assert.equal(args[args.indexOf("--resume") + 1], sessionId);
 });
 
-test("ordinary non-review resume discovery retains terminal candidate availability without review provenance", async (t) => {
+test("ordinary non-review resume discovery requires resolver authority without adding review provenance", async (t) => {
   const f = fixture(t);
   for (const status of ["completed", "failed", "cancelled", "timed_out"]) {
     await t.test(status, () => {
       const job = {
         id: "ordinary-discovery", kind: "advise", status, write: false,
-        codexThreadId: threadId, resumeSessionId: sessionId, result: "ordinary text"
+        codexThreadId: threadId, resumeSessionId: sessionId, resultSource: "provider-json", result: "ordinary text"
       };
       f.seed(job);
       const before = f.snapshot();
       const response = f.invoke(["resume-candidate"]);
       assert.equal(response.status, 0, response.stderr);
-      assert.deepEqual(JSON.parse(response.stdout), { available: true, candidate: job, candidates: [] });
+      assert.deepEqual(JSON.parse(response.stdout), { available: status === "completed", candidate: job, candidates: [] });
       assert.equal(f.invocations().length, 0);
       assert.deepEqual(f.snapshot(), before);
     });
