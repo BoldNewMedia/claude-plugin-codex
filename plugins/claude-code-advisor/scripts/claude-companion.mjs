@@ -402,6 +402,24 @@ function readValidatedReviewResult(job) {
   }
 }
 
+function reviewUnavailableDiagnostic(job) {
+  // These labels describe recorded metadata, not independently proven provider
+  // behaviour. Never copy stored diagnostic text or infer result authority.
+  if (job.status === "failed" &&
+      (job.lifecycleState == null || job.lifecycleState === "failed") &&
+      job.resultState === "unavailable" && job.result == null &&
+      job.resultSource == null && job.resultAuthoritativeAt == null) {
+    let cause;
+    switch (job.failureClassification) {
+      case "command-failure": cause = "the Claude command failed."; break;
+      case "invalid-result": cause = "the returned result failed validation."; break;
+      case "timeout": cause = "the Claude command timed out."; break;
+    }
+    if (cause) return `Claude review result is unavailable. Recorded failure metadata: ${cause}`;
+  }
+  return "Claude review result is unavailable because validated review authority is missing.";
+}
+
 function publicJob(job) {
   if (isReviewJob(job)) {
     const result = readValidatedReviewResult(job);
@@ -419,7 +437,7 @@ function publicJob(job) {
     }
     // Readback must not turn a legacy completion flag or raw envelope into
     // review authority. Project a fixed diagnostic without rewriting evidence.
-    const diagnostic = "Claude review result is unavailable because validated review authority is missing.";
+    const diagnostic = reviewUnavailableDiagnostic(job);
     return {
       id: job.id,
       kind: job.kind,
@@ -1180,13 +1198,16 @@ function persistMonitorSnapshot(ctx, job, snapshot) {
   return completeJob(ctx, job, patch);
 }
 
-function renderMonitorSnapshot(snapshot) {
+function renderMonitorSnapshot(snapshot, review = false) {
   const summary = snapshot.summary || summarizeLiveStatus(snapshot).summary;
   const lines = [
     `[${snapshot.checkedAt}] Claude ${snapshot.claudeSessionId || snapshot.job?.id || "job"} is ${summary.state}.`
   ];
   if (snapshot.error) {
     lines.push(snapshot.error);
+  }
+  if (review && snapshot.result?.state === "unavailable") {
+    lines.push(snapshot.result.reason);
   }
   if (summary.lastMeaningfulLine) {
     lines.push(`Last meaningful output: ${summary.lastMeaningfulLine}`);
@@ -1202,8 +1223,8 @@ function renderMonitorSnapshot(snapshot) {
   return `${lines.join("\n")}\n`;
 }
 
-function writeMonitorSnapshot(snapshot, asJson) {
-  process.stdout.write(asJson ? `${JSON.stringify(snapshot)}\n` : renderMonitorSnapshot(snapshot));
+function writeMonitorSnapshot(snapshot, asJson, review = false) {
+  process.stdout.write(asJson ? `${JSON.stringify(snapshot)}\n` : renderMonitorSnapshot(snapshot, review));
 }
 
 function managedSnapshot(job) {
@@ -1286,7 +1307,7 @@ async function monitorManagedJob(ctx, initialJob, options, intervalMs, maxChecks
     for (let index = 0; index < maxChecks; index += 1) {
       job = await reconcileSupervisedJob(ctx, job);
       const snapshot = managedSnapshot(job);
-      writeMonitorSnapshot(snapshot, options.json);
+      writeMonitorSnapshot(snapshot, options.json, isReviewJob(job));
       if (!snapshot.active) break;
       if (index < maxChecks - 1) await new Promise((resolve) => setTimeout(resolve, intervalMs));
       ctx.state = loadState(ctx.stateDir, { pathBoundary: ctx.stateRoot });
@@ -1305,7 +1326,7 @@ async function monitorManagedJob(ctx, initialJob, options, intervalMs, maxChecks
     available: legacyAvailable,
     result: legacyAvailable
       ? { state: "available", result: job.result, source: job.resultSource || "legacy-authoritative" }
-      : { state: "unavailable", reason: "legacy-lifecycle-unsupported" },
+      : { state: "unavailable", reason: isReviewJob(job) ? job.resultDiagnostic : "legacy-lifecycle-unsupported" },
     logs: { available: false, output: "", meaningfulOutput: "" },
     summary: {
       state: legacyAvailable ? "completed" : "interrupted",
@@ -1316,7 +1337,7 @@ async function monitorManagedJob(ctx, initialJob, options, intervalMs, maxChecks
       staleFor: "0s",
       suggestedAction: "Legacy terminal logs are not re-read."
     }
-  }, options.json);
+  }, options.json, isReviewJob(job));
 }
 
 async function handleStatus(argv) {
@@ -1348,7 +1369,7 @@ async function handleStatus(argv) {
       lifecycleState: legacyAvailable ? "completed" : "interrupted",
       result: legacyAvailable
         ? { state: "available", result: displayedJob.result, source: displayedJob.resultSource || "legacy-authoritative" }
-        : { state: "unavailable", reason: "legacy-lifecycle-unsupported" }
+        : { state: "unavailable", reason: isReviewJob(job) ? displayedJob.resultDiagnostic : "legacy-lifecycle-unsupported" }
     }
   }, options.json);
 }

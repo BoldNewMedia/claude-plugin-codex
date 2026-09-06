@@ -467,6 +467,12 @@ small routing test.
   moved into supervised background jobs after a timeout. Status, result, monitor and candidate
   listings withhold unproven findings and raw envelopes. Original stored evidence
   remains unchanged; a legacy completion flag alone does not prove a valid review.
+- Unavailable review readback uses fixed explanations for recorded command failure,
+  invalid result or timeout classifications when the stored failure state agrees.
+  These explanations are labelled as recorded metadata, not independently verified
+  provider behaviour. Missing, unknown or conflicting metadata keeps the generic
+  unavailable explanation. Raw stored diagnostics remain hidden, and a recorded
+  cause grants neither result authority nor permission to resume.
 
 ## Troubleshooting
 
