@@ -462,6 +462,11 @@ small routing test.
   tool-call markup while rejecting ambiguous multiple objects. The extracted
   review payload is still validated strictly, and the companion retries once
   before failing.
+- Historical foreground reviews need validated findings and recorded provider
+  authority to appear as completed results, including reviews that older versions
+  moved into supervised background jobs after a timeout. Status, result, monitor and candidate
+  listings withhold unproven findings and raw envelopes. Original stored evidence
+  remains unchanged; a legacy completion flag alone does not prove a valid review.
 
 ## Troubleshooting
 
