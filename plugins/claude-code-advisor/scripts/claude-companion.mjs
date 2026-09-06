@@ -370,7 +370,68 @@ function persistContext(ctx, mutator) {
   return saved;
 }
 
+function isReviewJob(job) {
+  return ["review", "adversarial-review"].includes(job?.kind);
+}
+
+function readValidatedReviewResult(job) {
+  if (
+    job.status !== "completed" ||
+    (job.lifecycleState && job.lifecycleState !== "completed") ||
+    job.resultState !== "available" ||
+    job.resultSource !== "provider-json" ||
+    typeof job.resultAuthoritativeAt !== "string" ||
+    !Number.isFinite(Date.parse(job.resultAuthoritativeAt)) ||
+    !isCanonicalResumeReference(job.resumeSessionId) ||
+    job.canonicalSessionId !== job.resumeSessionId ||
+    job.failureClassification || job.failureDiagnostic || job.resultDiagnostic
+  ) return null;
+  try {
+    // Older foreground timeouts could create supervised review jobs. Their
+    // envelope was validated, but their string result still needs a review check.
+    if (isSupervisedJob(job)) {
+      if (job.lifecycleState !== "completed" || typeof job.result !== "string") return null;
+      const parsed = parseClaudeJsonResult(JSON.stringify({ result: job.result }));
+      return validateReviewPayload(parsed.contentRaw);
+    }
+    if (job.claudeSessionId !== job.resumeSessionId ||
+        !job.result || typeof job.result !== "object" || Array.isArray(job.result)) return null;
+    return validateReviewPayload(JSON.stringify(job.result));
+  } catch {
+    return null;
+  }
+}
+
 function publicJob(job) {
+  if (isReviewJob(job)) {
+    const result = readValidatedReviewResult(job);
+    if (result) {
+      // Even proven legacy reviews may retain an envelope with surrounding raw
+      // output. Only the validated findings and their provenance are public.
+      const fields = [
+        "id", "kind", "status", "write", "codexThreadId", "workspaceRoot",
+        "createdAt", "updatedAt", "lifecycleState", "result", "resultState",
+        "resultSource", "resultAuthoritativeAt", "claudeSessionId",
+        "canonicalSessionId", "resumeSessionId", "recordVersion", "transport",
+        "lifecycleId", "cleanupStatus", "terminalAt"
+      ];
+      return { ...Object.fromEntries(fields.filter((field) => Object.hasOwn(job, field)).map((field) => [field, job[field]])), result };
+    }
+    // Readback must not turn a legacy completion flag or raw envelope into
+    // review authority. Project a fixed diagnostic without rewriting evidence.
+    const diagnostic = "Claude review result is unavailable because validated review authority is missing.";
+    return {
+      id: job.id,
+      kind: job.kind,
+      status: ["created", "starting", "running", "cancelling", "cancelled", "failed", "interrupted", "timed_out"].includes(job.status)
+        ? job.status : "interrupted",
+      write: Boolean(job.write),
+      result: null,
+      resultState: "unavailable",
+      resultDiagnostic: diagnostic,
+      failureDiagnostic: diagnostic
+    };
+  }
   if (!job || !isSupervisedJob(job)) return job;
   const { supervisor: _supervisor, ...safe } = job;
   return safe;
@@ -1146,21 +1207,24 @@ function writeMonitorSnapshot(snapshot, asJson) {
 }
 
 function managedSnapshot(job) {
-  const terminal = ["completed", "cancelled", "failed", "interrupted"].includes(job.lifecycleState);
+  const displayedJob = publicJob(job);
+  const lifecycleState = isReviewJob(job) && job.lifecycleState === "completed" && displayedJob.resultState !== "available"
+    ? "interrupted" : job.lifecycleState;
+  const terminal = ["completed", "cancelled", "failed", "interrupted"].includes(lifecycleState);
   return {
     checkedAt: new Date().toISOString(),
     jobId: job.id,
     lifecycleId: job.lifecycleId,
-    lifecycleState: job.lifecycleState,
+    lifecycleState,
     active: !terminal,
-    completed: job.lifecycleState === "completed",
-    available: true,
-    result: job.resultState === "available"
-      ? { state: "available", source: "provider-json", result: job.result }
-      : { state: "unavailable", reason: job.failureClassification || "result-pending" },
+    completed: lifecycleState === "completed",
+    available: isReviewJob(job) ? displayedJob.resultState === "available" : true,
+    result: displayedJob.resultState === "available"
+      ? { state: "available", source: "provider-json", result: displayedJob.result }
+      : { state: "unavailable", reason: displayedJob.resultDiagnostic || job.failureClassification || "result-pending" },
     logs: { available: false, output: "", meaningfulOutput: "" },
     summary: {
-      state: job.lifecycleState,
+      state: lifecycleState,
       active: !terminal,
       lastMeaningfulLine: null,
       stale: false,
@@ -1230,6 +1294,7 @@ async function monitorManagedJob(ctx, initialJob, options, intervalMs, maxChecks
     }
     return;
   }
+  job = publicJob(job);
   const legacyAvailable = Boolean(job.resultAuthoritativeAt && job.resultState === "available");
   writeMonitorSnapshot({
     checkedAt: new Date().toISOString(),
@@ -1275,13 +1340,14 @@ async function handleStatus(argv) {
     output({ job: publicJob(updated), live: managedSnapshot(updated) }, options.json);
     return;
   }
-  const legacyAvailable = Boolean(job.resultAuthoritativeAt && job.resultState === "available");
+  const displayedJob = publicJob(job);
+  const legacyAvailable = Boolean(displayedJob.resultAuthoritativeAt && displayedJob.resultState === "available");
   output({
-    job,
+    job: displayedJob,
     live: {
       lifecycleState: legacyAvailable ? "completed" : "interrupted",
       result: legacyAvailable
-        ? { state: "available", result: job.result, source: job.resultSource || "legacy-authoritative" }
+        ? { state: "available", result: displayedJob.result, source: displayedJob.resultSource || "legacy-authoritative" }
         : { state: "unavailable", reason: "legacy-lifecycle-unsupported" }
     }
   }, options.json);
@@ -1296,15 +1362,17 @@ async function handleResult(argv) {
   }
   if (isSupervisedJob(job)) {
     job = await reconcileSupervisedJob(ctx, job);
-    const available = job.lifecycleState === "completed" && job.resultState === "available";
+    const displayedJob = publicJob(job);
+    const available = job.lifecycleState === "completed" && displayedJob.resultState === "available";
     output({
-      job: publicJob(job),
+      job: displayedJob,
       resultState: available ? "available" : "unavailable",
-      result: available ? job.result : null,
-      diagnostic: available ? null : job.failureClassification || "No authoritative final assistant answer is available."
+      result: available ? displayedJob.result : null,
+      diagnostic: available ? null : displayedJob.resultDiagnostic || job.failureClassification || "No authoritative final assistant answer is available."
     }, options.json);
     return;
   }
+  job = publicJob(job);
   const isBackground = Boolean(job.lifecycleId || job.claudeSessionId || job.sessionName || job.status === "launch_uncertain");
   const available = isBackground
     ? Boolean(job.resultAuthoritativeAt && job.resultState === "available")
@@ -1339,14 +1407,14 @@ async function handleCancel(argv) {
       if (terminalJob.cleanupStatus === "pending") {
         throw new Error("Claude cleanup did not reach a verified terminal status.");
       }
-      output({ jobId: terminalJob.id, status: terminalJob.lifecycleState }, options.json);
+      output({ jobId: terminalJob.id, status: publicJob(terminalJob).status }, options.json);
       return;
     }
     const timeoutMs = boundedPositiveInteger(options["timeout-ms"], 10000, 100, 30000);
     const requested = await sendSupervisorCommand(ctx, job, "cancel", Math.min(timeoutMs, 6000));
     if (!requested.ok) {
       const interrupted = await reconcileSupervisedJob(ctx, job);
-      output({ jobId: interrupted.id, status: interrupted.lifecycleState }, options.json);
+      output({ jobId: interrupted.id, status: publicJob(interrupted).status }, options.json);
       return;
     }
     const deadline = Date.now() + timeoutMs;
@@ -1358,14 +1426,14 @@ async function handleCancel(argv) {
         ["completed", "cancelled", "failed", "interrupted"].includes(current.lifecycleState) &&
         current.cleanupStatus !== "pending"
       ) {
-        output({ jobId: current.id, status: current.lifecycleState }, options.json);
+        output({ jobId: current.id, status: publicJob(current).status }, options.json);
         return;
       }
       await new Promise((resolve) => setTimeout(resolve, 20));
     }
     throw new Error("Claude cancellation did not reach a verified terminal state.");
   }
-  output({ jobId: job.id, status: job.resultAuthoritativeAt ? "completed" : "interrupted" }, options.json);
+  output({ jobId: job.id, status: publicJob(job).resultAuthoritativeAt ? "completed" : "interrupted" }, options.json);
 }
 
 function handleResumeCandidate(argv) {
